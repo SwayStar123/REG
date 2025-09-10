@@ -96,7 +96,7 @@ class LabelEmbedder(nn.Module):
         if (train and use_dropout) or (force_drop_ids is not None):
             labels = self.token_drop(labels, force_drop_ids)
         embeddings = self.embedding_table(labels)
-        return embeddings
+        return embeddings, labels
 
 
 #################################################################################
@@ -182,9 +182,11 @@ class SiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         use_cfg=False,
-        z_dims=[768],
+        z_dim=768,
         projector_dim=2048,
         cls_token_dim=768,
+        use_sra=True,
+        teacher_depth=24,
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -197,6 +199,8 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.teacher_depth = teacher_depth
+        self.use_sra = use_sra
 
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
@@ -210,11 +214,7 @@ class SiT(nn.Module):
         self.blocks = nn.ModuleList([
             SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
         ])
-        self.projectors = nn.ModuleList([
-            build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
-            ])
-
-        z_dim = self.z_dims[0]
+        self.projector = build_mlp(hidden_size, projector_dim*2 if use_sra else projector_dim, z_dim + hidden_size if use_sra else z_dim)
         cls_token_dim = z_dim
         self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
 
@@ -279,7 +279,7 @@ class SiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
     
-    def forward(self, x, t, y, return_logvar=False, cls_token=None):
+    def forward(self, x, t, y, return_logvar=False, cls_token=None, early_exit=False):
         """
         Forward pass of SiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -301,18 +301,23 @@ class SiT(nn.Module):
 
         # timestep and class embedding
         t_embed = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
+        y, labels_train = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
         for i, block in enumerate(self.blocks):
             x = block(x, c)
-            if (i + 1) == self.encoder_depth:
-                zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+            if (i + 1) == self.encoder_depth and self.training:
+                z_tilde = self.projector(x.reshape(-1, D)).reshape(N, T, -1)
+            elif (i + 1) == self.teacher_depth and not self.training:
+                z_tilde = x
+                if early_exit:
+                    return None, z_tilde, None, None
+
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
 
-        return x, zs, cls_token
+        return x, z_tilde, cls_token, labels_train
 
 
 #################################################################################
@@ -375,40 +380,40 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def SiT_XL_2(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, encoder_depth=8, teacher_depth=20,**kwargs)
 
 def SiT_XL_4(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, encoder_depth=8, teacher_depth=20, **kwargs)
 
 def SiT_XL_8(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=8, num_heads=16, encoder_depth=8, teacher_depth=20, **kwargs)
 
 def SiT_L_2(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, encoder_depth=6, teacher_depth=16, **kwargs)
 
 def SiT_L_4(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, encoder_depth=6, teacher_depth=16, **kwargs)
 
 def SiT_L_8(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=8, num_heads=16, encoder_depth=6, teacher_depth=16, **kwargs)
 
 def SiT_B_2(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, encoder_depth=3, teacher_depth=8, **kwargs)
 
 def SiT_B_4(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, encoder_depth=3, teacher_depth=8, **kwargs)
 
 def SiT_B_8(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=8, num_heads=12, encoder_depth=3, teacher_depth=8, **kwargs)
 
 def SiT_S_2(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, decoder_hidden_size=384, patch_size=2, num_heads=6, encoder_depth=3, teacher_depth=8, **kwargs)
 
 def SiT_S_4(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, decoder_hidden_size=384, patch_size=4, num_heads=6, encoder_depth=3, teacher_depth=8, **kwargs)
 
 def SiT_S_8(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, decoder_hidden_size=384, patch_size=8, num_heads=6, encoder_depth=3, teacher_depth=8, **kwargs)
 
 
 SiT_models = {

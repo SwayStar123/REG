@@ -24,6 +24,7 @@ class SILoss:
             accelerator=None, 
             latents_scale=None, 
             latents_bias=None,
+            use_sra=True,
             ):
         self.prediction = prediction
         self.weighting = weighting
@@ -32,6 +33,7 @@ class SILoss:
         self.accelerator = accelerator
         self.latents_scale = latents_scale
         self.latents_bias = latents_bias
+        self.use_sra = use_sra
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -49,10 +51,9 @@ class SILoss:
 
         return alpha_t, sigma_t, d_alpha_t, d_sigma_t
 
-    def __call__(self, model, images, model_kwargs=None, zs=None, cls_token=None,
+    def __call__(self, model, images, teacher=None, y=None, zs=None, cls_token=None,
                  time_input=None, noises=None,):
-        if model_kwargs == None:
-            model_kwargs = {}
+
         # sample timesteps
         if time_input is None:
             if self.weighting == "uniform":
@@ -65,7 +66,9 @@ class SILoss:
                     time_input = sigma / (1 + sigma)
                 elif self.path_type == "cosine":
                     time_input = 2 / np.pi * torch.atan(sigma)
-                
+
+        if self.use_sra:
+            time_input_teacher = time_input - (self.t_max * torch.rand_like(time_input))                
         time_input = time_input.to(device=images.device, dtype=images.dtype)
 
         if noises is None:
@@ -82,8 +85,16 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
+        model_output, zs_tilde, cls_output, labels_train = model(model_input, time_input.flatten(), **model_kwargs,
                                                     cls_token=cls_input)
+
+        if self.use_sra:
+            z_tilde = zs_tilde[0]
+            # Split z_tilde into cls_dim and hidden_dim
+            cls_dim = cls_output.shape[-1]
+            z_tilde, xr = z_tilde[:, :cls_dim], z_tilde[:, cls_dim:]
+
+            zs_tilde = [z_tilde]
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)
@@ -99,4 +110,21 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+        if self.use_sra:
+            # teacher
+            time_input_teacher = torch.clamp(time_input_teacher, 0, 1)
+            time_input_teacher = time_input_teacher.to(device=images.device, dtype=images.dtype)
+            labels_teacher = labels_train
+            noises_t = noises
+            images_t = images
+            alpha_teacher, sigma_teacher, d_alpha_teacher, d_sigma_teacher = self.interpolant(time_input_teacher)
+            teacher_input = alpha_teacher * images_t + sigma_teacher * noises_t
+
+            xr_t = teacher(teacher_input, time_input_teacher.flatten(), y=labels_teacher, early_exit=True)[1]
+
+            # loss
+            align_loss = F.smooth_l1_loss(xr, xr_t, beta=0.05)
+        else:
+            align_loss = 0.
+
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, align_loss

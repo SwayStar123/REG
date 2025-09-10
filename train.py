@@ -33,31 +33,12 @@ from torchvision.transforms import Normalize
 
 logger = get_logger(__name__)
 
-CLIP_DEFAULT_MEAN = (0.48145466, 0.4578275, 0.40821073)
-CLIP_DEFAULT_STD = (0.26862954, 0.26130258, 0.27577711)
-
-
-
 def preprocess_raw_image(x, enc_type):
     resolution = x.shape[-1]
-    if 'clip' in enc_type:
-        x = x / 255.
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
-        x = Normalize(CLIP_DEFAULT_MEAN, CLIP_DEFAULT_STD)(x)
-    elif 'mocov3' in enc_type or 'mae' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-    elif 'dinov2' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
-    elif 'dinov1' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-    elif 'jepa' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
+
+    x = x / 255.
+    x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
+    x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
 
     return x
 
@@ -167,10 +148,11 @@ def main(args):
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
         input_size=latent_size,
+        in_channels=4+args.pca_rank,
         num_classes=args.num_classes,
         use_cfg = (args.cfg_prob > 0),
-        z_dims = z_dims,
-        encoder_depth=args.encoder_depth,
+        z_dim=z_dim[0],
+        use_sra=args.use_sra,
         **block_kwargs
     )
 
@@ -185,6 +167,17 @@ def main(args):
         [0., 0., 0., 0.]
         ).view(1, 4, 1, 1).to(device)
 
+    if args.use_redi:
+        pca_stats = torch.load(args.pca_model_path)
+        pca_model = pca_stats["pca_model"]
+
+        pca_components = torch.tensor(pca_model.components_[:args.pca_rank, :]).to(device)
+
+        pca_mean = torch.tensor(pca_model.mean_).to(device)
+        mean_dino = torch.tensor(pca_stats["mean"]).to(device)
+        std_dino = torch.tensor(pca_stats["std"]).to(device)
+
+
     # create loss function
     loss_fn = SILoss(
         prediction=args.prediction,
@@ -193,7 +186,8 @@ def main(args):
         accelerator=accelerator,
         latents_scale=latents_scale,
         latents_bias=latents_bias,
-        weighting=args.weighting
+        weighting=args.weighting,
+        use_sra=args.use_sra
     )
     if accelerator.is_main_process:
         logger.info(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -278,8 +272,15 @@ def main(args):
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
-    xT = torch.randn((n, 4, latent_size, latent_size), device=device)
-        
+    xT = torch.randn((n, 4+args.pca_rank, latent_size, latent_size), device=device)
+    cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+
+    # sampling directory & VAE placeholder
+    if accelerator.is_main_process:
+        sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
+        os.makedirs(sample_dir, exist_ok=True)
+    vae = None  # lazily loaded
+
     for epoch in range(args.epochs):
         model.train()
         for raw_image, x, y in train_dataloader:
@@ -310,9 +311,17 @@ def main(args):
                             exit()
                         zs.append(dense_z)
 
+                z = (z - mean_dino) / std_dino
+                z = z - pca_mean
+
+                z_pca = z @ pca_components.T
+                z_pca = z_pca.reshape(x.shape[0], 16, 16, args.pca_rank).permute(0,3,1,2)
+                z_pca = torch.nn.functional.interpolate(z_pca, size=(32,32), mode='bilinear')
+
+                x = torch.cat([x,z_pca], dim=1)
+
             with accelerator.accumulate(model):
-                model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, y=labels, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
@@ -350,7 +359,51 @@ def main(args):
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
             if (global_step == 1 or (global_step % args.sampling_steps == 0 and global_step > 0)):
-                logging.info("Generating EMA samples done.")
+                with torch.no_grad():
+                    ema.eval()
+                    # load VAE once
+                    if vae is None:
+                        try:
+                            vae_local = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+                        except Exception as e:
+                            logging.warning(f"Failed to load VAE: {e}; skipping sampling this step.")
+                            vae_local = None
+                        vae = vae_local
+                    if vae is not None:
+                        sampling_kwargs = dict(
+                            model=ema,
+                            latents=xT.clone(),
+                            y=ys.clone(),
+                            num_steps=args.num_sample_steps,
+                            heun=False,
+                            cfg_scale=args.cfg_scale,
+                            guidance_low=args.guidance_low,
+                            guidance_high=args.guidance_high,
+                            path_type=args.path_type,
+                            cls_latents=cls_z.clone(),
+                            args=args,
+                        )
+                        try:
+                            samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+
+                            if args.use_redi:
+                                samples = samples[:, :4, :, :]
+
+                            # decode to pixels
+                            samples = vae.decode((samples - latents_bias) / latents_scale).sample
+                            samples = (samples + 1) / 2.
+                            samples = samples.clamp(0, 1)
+                            accelerator.wait_for_everyone()
+                            gathered = accelerator.gather(samples)
+                            if accelerator.is_main_process:
+                                grid = array2grid(gathered)
+                                Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")
+                                logger.info(f"Saved samples at step {global_step}")
+                                if global_step % 20000 == 0:
+                                    accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(f"Sampling failed at step {global_step}: {e}")
 
             logs = {
                 "loss_final": accelerator.gather(loss).mean().detach().item(),
@@ -393,10 +446,11 @@ def parse_args(input_args=None):
     # model
     parser.add_argument("--model", type=str)
     parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--encoder-depth", type=int, default=8)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
+    parser.add_argument("--pca-rank", type=int, default=8)
+    parser.add_argument("--pca-model-path", type=str, default="./pcs/dino_pca_model.pth")
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
@@ -434,6 +488,17 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+    parser.add_argument("--use-redi", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-sra", action=argparse.BooleanOptionalAction, default=True)
+
+    # sampling specific
+    parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
+    parser.add_argument("--cls-cfg-scale", type=float, default=1.0, help="CLS guidance scale (used inside sampler).")
+    parser.add_argument("--guidance-low", type=float, default=0.0)
+    parser.add_argument("--guidance-high", type=float, default=1.0)
+    parser.add_argument("--num-sample-steps", type=int, default=50, help="Diffusion sampling steps for in-training sampling.")
+    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="mse", help="Which Stable Diffusion VAE variant to use for decoding samples.")
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
