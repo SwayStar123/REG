@@ -68,7 +68,7 @@ def main(args):
         in_channels=4+args.pca_rank if args.use_redi else 4,
         use_cfg = True,
         z_dim = int(args.projector_embed_dims.split(',')[0]),
-        use_sra=True,
+        use_sra=args.use_sra,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -207,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-redi", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-sra", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pca-rank", type=int, default=8)
     # vae
     parser.add_argument("--vae",  type=str, choices=["ema", "mse"], default="ema")

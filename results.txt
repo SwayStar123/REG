@@ -50,4 +50,11 @@ REG+SRA:
             Precision: 0.51432
             Recall: 0.6183
 
-
+REG:
+    B/2 no CFG:
+        100k:
+            Inception Score: 45.378944396972656
+            FID: 36.681860412647666
+            sFID: 7.769499347895589
+            Precision: 0.52994
+            Recall: 0.6026
