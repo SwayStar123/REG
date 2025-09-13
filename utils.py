@@ -3,7 +3,6 @@ from torchvision.datasets.utils import download_url
 import torch
 import torchvision.models as torchvision_models
 import timm
-from models import mocov3_vit
 import math
 import warnings
 
@@ -42,7 +41,7 @@ def load_encoders(enc_type, device, resolution=256):
         architectures.append(architecture)
         encoder_types.append(encoder_type)
 
-        elif 'dinov2' in encoder_type:
+        if 'dinov2' in encoder_type:
             import timm
             if 'reg' in encoder_type:
                 try:

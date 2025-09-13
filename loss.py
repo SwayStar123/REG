@@ -34,6 +34,7 @@ class SILoss:
         self.latents_scale = latents_scale
         self.latents_bias = latents_bias
         self.use_sra = use_sra
+        self.t_max = 0.2
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -51,7 +52,7 @@ class SILoss:
 
         return alpha_t, sigma_t, d_alpha_t, d_sigma_t
 
-    def __call__(self, model, images, teacher=None, y=None, zs=None, cls_token=None,
+    def __call__(self, model, images, teacher=None, y=None, z=None, cls_token=None,
                  time_input=None, noises=None,):
 
         # sample timesteps
@@ -85,16 +86,13 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output, labels_train = model(model_input, time_input.flatten(), **model_kwargs,
+        model_output, z_tilde, cls_output, labels_train = model(model_input, time_input.flatten(), y=y,
                                                     cls_token=cls_input)
 
         if self.use_sra:
-            z_tilde = zs_tilde[0]
             # Split z_tilde into cls_dim and hidden_dim
             cls_dim = cls_output.shape[-1]
-            z_tilde, xr = z_tilde[:, :cls_dim], z_tilde[:, cls_dim:]
-
-            zs_tilde = [z_tilde]
+            z_tilde, xr = z_tilde[:, :, :cls_dim], z_tilde[:, :, cls_dim:]
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)
@@ -102,13 +100,12 @@ class SILoss:
 
         # projection loss
         proj_loss = 0.
-        bsz = zs[0].shape[0]
-        for i, (z, z_tilde) in enumerate(zip(zs, zs_tilde)):
-            for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
-                z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1) 
-                z_j = torch.nn.functional.normalize(z_j, dim=-1) 
-                proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
-        proj_loss /= (len(zs) * bsz)
+        bsz = z.shape[0]
+        for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
+            z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1) 
+            z_j = torch.nn.functional.normalize(z_j, dim=-1) 
+            proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
+        proj_loss /= bsz
 
         if self.use_sra:
             # teacher
@@ -119,8 +116,9 @@ class SILoss:
             images_t = images
             alpha_teacher, sigma_teacher, d_alpha_teacher, d_sigma_teacher = self.interpolant(time_input_teacher)
             teacher_input = alpha_teacher * images_t + sigma_teacher * noises_t
+            teacher_cls_input = alpha_teacher.squeeze(-1).squeeze(-1) * cls_token + sigma_teacher.squeeze(-1).squeeze(-1) * noises_cls
 
-            xr_t = teacher(teacher_input, time_input_teacher.flatten(), y=labels_teacher, early_exit=True)[1]
+            _, xr_t, _, _ = teacher(teacher_input, time_input_teacher.flatten(), cls_token=teacher_cls_input, y=labels_teacher, early_exit=True)
 
             # loss
             align_loss = F.smooth_l1_loss(xr, xr_t, beta=0.05)

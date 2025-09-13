@@ -12,6 +12,50 @@ import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
+# Dispersive loss
+class _AddAuxLoss(torch.autograd.Function):
+    """Pass x through unchanged, but add d/d(loss) during backward."""
+    @staticmethod
+    def forward(ctx, x, loss):
+        # stash whether we need grad wrt the scalar aux loss and its dtype
+        ctx.need_grad = loss.requires_grad
+        ctx.loss_dtype = loss.dtype
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # gradient wrt x is untouched; wrt loss is 1 (adds the aux loss)
+        grad_loss = torch.ones(1, dtype=ctx.loss_dtype, device=grad_output.device) if ctx.need_grad else None
+        return grad_output, grad_loss
+
+
+class DispersiveReg(torch.nn.Module):
+    """
+    InfoNCE-like dispersive regularizer (no positives), ℓ2 distance.
+    L_disp = log( mean_{i,j} exp( -||z_i - z_j||^2 / tau ) )
+    Best defaults from the paper: tau=0.5, weight=0.5.
+    """
+    def __init__(self, tau: float = 0.5, weight: float = 0.5):
+        super().__init__()
+        self.tau = float(tau)
+        self.weight = float(weight)
+
+    @torch.no_grad()
+    def _flatten_batch_reprs(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [N, T, D]  -> z: [N, T*D]
+        N = x.shape[0]
+        return x.reshape(N, -1).to(torch.float32)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if (not self.training) or self.weight <= 0:
+            return x
+        # build batch-wise representations z and compute pairwise squared ℓ2
+        z = self._flatten_batch_reprs(x)                      # [N, D']
+        # full NxN matrix (includes i==j; harmless and simplifies impl)
+        D_sq = torch.cdist(z, z, p=2.0) ** 2                  # [N, N]
+        disp = torch.log(torch.mean(torch.exp(-D_sq / self.tau)))  # scalar
+        # inject the (weighted) aux loss into the graph without changing x
+        return _AddAuxLoss.apply(x, disp * self.weight)
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -107,7 +151,7 @@ class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, use_dispersive_loss=True, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
@@ -126,6 +170,12 @@ class SiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
+        self.use_dispersive_loss = use_dispersive_loss
+        if self.use_dispersive_loss:
+            self.disp = DispersiveReg(tau=0.5, weight=0.5)
+        else:
+            self.disp = nn.Identity()
+
     def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
@@ -133,7 +183,7 @@ class SiTBlock(nn.Module):
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
 
-        return x
+        return self.disp(x)
 
 
 class FinalLayer(nn.Module):
@@ -187,6 +237,7 @@ class SiT(nn.Module):
         cls_token_dim=768,
         use_sra=True,
         teacher_depth=24,
+        use_dispersive_loss=True,
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -197,10 +248,11 @@ class SiT(nn.Module):
         self.num_heads = num_heads
         self.use_cfg = use_cfg
         self.num_classes = num_classes
-        self.z_dims = z_dims
+        self.z_dim = z_dim
         self.encoder_depth = encoder_depth
         self.teacher_depth = teacher_depth
         self.use_sra = use_sra
+        self.use_dispersive_loss = use_dispersive_loss
 
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
@@ -212,7 +264,7 @@ class SiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
+            SiTBlock(hidden_size, num_heads, use_dispersive_loss=use_dispersive_loss, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
         ])
         self.projector = build_mlp(hidden_size, projector_dim*2 if use_sra else projector_dim, z_dim + hidden_size if use_sra else z_dim)
         cls_token_dim = z_dim

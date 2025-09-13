@@ -18,7 +18,7 @@ class CustomDataset(Dataset):
         PIL.Image.init()
         supported_ext = PIL.Image.EXTENSION.keys() | {'.npy'}
 
-        self.images_dir = os.path.join(data_dir, 'imagenet_256_vae')
+        self.images_dir = os.path.join(data_dir, 'images')
         self.features_dir = os.path.join(data_dir, 'vae-sd')
 
         # images

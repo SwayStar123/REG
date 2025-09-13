@@ -65,9 +65,10 @@ def main(args):
     model = SiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes,
+        in_channels=4+args.pca_rank if args.use_redi else 4,
         use_cfg = True,
-        z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
-        encoder_depth=args.encoder_depth,
+        z_dim = int(args.projector_embed_dims.split(',')[0]),
+        use_sra=True,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -116,7 +117,7 @@ def main(args):
     if rank == 0:
         print(f"Total number of images that will be sampled: {total_samples}")
         print(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"projector Parameters: {sum(p.numel() for p in model.projectors.parameters()):,}")
+        print(f"projector Parameters: {sum(p.numel() for p in model.projector.parameters()):,}")
     assert total_samples % dist.get_world_size() == 0, "total_samples must be divisible by world_size"
     samples_needed_this_gpu = int(total_samples // dist.get_world_size())
     assert samples_needed_this_gpu % n == 0, "samples_needed_this_gpu must be divisible by the per-GPU batch size"
@@ -159,6 +160,11 @@ def main(args):
             latents_bias = -torch.tensor(
                 [0., 0., 0., 0.,]
                 ).view(1, 4, 1, 1).to(device)
+
+            if args.use_redi:
+                # Remove pca rank
+                samples = samples[:, :4, :, :]
+
             samples = vae.decode((samples -  latents_bias) / latents_scale).sample
             samples = (samples + 1) / 2.
             samples = torch.clamp(
@@ -200,6 +206,8 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-redi", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pca-rank", type=int, default=8)
     # vae
     parser.add_argument("--vae",  type=str, choices=["ema", "mse"], default="ema")
 

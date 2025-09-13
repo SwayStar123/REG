@@ -30,6 +30,8 @@ import math
 from torchvision.utils import make_grid
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision.transforms import Normalize
+from samplers import euler_maruyama_sampler
+from PIL import Image
 
 logger = get_logger(__name__)
 
@@ -112,7 +114,7 @@ def main(args):
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
-        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=False)]
     )
 
     if accelerator.is_main_process:
@@ -148,11 +150,12 @@ def main(args):
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
         input_size=latent_size,
-        in_channels=4+args.pca_rank,
+        in_channels=4+args.pca_rank if args.use_redi else 4,
         num_classes=args.num_classes,
         use_cfg = (args.cfg_prob > 0),
-        z_dim=z_dim[0],
+        z_dim=z_dims[0],
         use_sra=args.use_sra,
+        use_dispersive_loss=args.use_dispersive_loss,
         **block_kwargs
     )
 
@@ -187,7 +190,7 @@ def main(args):
         latents_scale=latents_scale,
         latents_bias=latents_bias,
         weighting=args.weighting,
-        use_sra=args.use_sra
+        use_sra=args.use_sra,
     )
     if accelerator.is_main_process:
         logger.info(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -244,7 +247,7 @@ def main(args):
     if accelerator.is_main_process:
         tracker_config = vars(copy.deepcopy(args))
         accelerator.init_trackers(
-            project_name="REG",
+            project_name="representation-salad",
             config=tracker_config,
             init_kwargs={
                 "wandb": {"name": f"{args.exp_name}"}
@@ -272,7 +275,7 @@ def main(args):
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
-    xT = torch.randn((n, 4+args.pca_rank, latent_size, latent_size), device=device)
+    xT = torch.randn((n, 4+args.pca_rank if args.use_redi else 4, latent_size, latent_size), device=device)
     cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
 
     # sampling directory & VAE placeholder
@@ -298,7 +301,6 @@ def main(args):
                 labels = y
             with torch.no_grad():
                 x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
-                zs = []
                 with accelerator.autocast():
                     for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
                         raw_image_ = preprocess_raw_image(raw_image, encoder_type)
@@ -309,25 +311,28 @@ def main(args):
                             dense_z = torch.cat([cls_token.unsqueeze(1), dense_z], dim=1)
                         else:
                             exit()
-                        zs.append(dense_z)
 
-                z = (z - mean_dino) / std_dino
-                z = z - pca_mean
+                if args.use_redi:
+                    z = (z['x_norm_patchtokens'] - mean_dino) / std_dino
+                    z = z - pca_mean
 
-                z_pca = z @ pca_components.T
-                z_pca = z_pca.reshape(x.shape[0], 16, 16, args.pca_rank).permute(0,3,1,2)
-                z_pca = torch.nn.functional.interpolate(z_pca, size=(32,32), mode='bilinear')
+                    z_pca = z @ pca_components.T
+                    z_pca = z_pca.reshape(x.shape[0], 16, 16, args.pca_rank).permute(0,3,1,2)
+                    z_pca = torch.nn.functional.interpolate(z_pca, size=(32,32), mode='bilinear')
 
-                x = torch.cat([x,z_pca], dim=1)
+                    x = torch.cat([x,z_pca], dim=1)
 
             with accelerator.accumulate(model):
-                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, y=labels, zs=zs,
-                                                                       cls_token=cls_token,
+                loss1, proj_loss1, time_input, noises, loss2, align_loss = loss_fn(model, x, y=labels, z=dense_z,
+                                                                       cls_token=cls_token, teacher=ema,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
                 loss = loss_mean + proj_loss_mean + loss_mean_cls
+                if args.use_sra:
+                    align_loss_mean = align_loss.mean()
+                    loss = loss + align_loss_mean
 
 
                 ## optimization
@@ -383,27 +388,24 @@ def main(args):
                             cls_latents=cls_z.clone(),
                             args=args,
                         )
-                        try:
-                            samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+                        samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
 
-                            if args.use_redi:
-                                samples = samples[:, :4, :, :]
+                        if args.use_redi:
+                            samples = samples[:, :4, :, :]
 
-                            # decode to pixels
-                            samples = vae.decode((samples - latents_bias) / latents_scale).sample
-                            samples = (samples + 1) / 2.
-                            samples = samples.clamp(0, 1)
-                            accelerator.wait_for_everyone()
-                            gathered = accelerator.gather(samples)
-                            if accelerator.is_main_process:
-                                grid = array2grid(gathered)
-                                Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")
-                                logger.info(f"Saved samples at step {global_step}")
-                                if global_step % 20000 == 0:
-                                    accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
-                        except Exception as e:
-                            if accelerator.is_main_process:
-                                logger.warning(f"Sampling failed at step {global_step}: {e}")
+                        # decode to pixels
+                        samples = vae.decode((samples - latents_bias) / latents_scale).sample
+                        samples = (samples + 1) / 2.
+                        samples = samples.clamp(0, 1)
+                        accelerator.wait_for_everyone()
+                        gathered = accelerator.gather(samples)
+                        if accelerator.is_main_process:
+                            grid = array2grid(gathered)
+                            Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")
+                            logger.info(f"Saved samples at step {global_step}")
+                            if global_step % 20000 == 0:
+                                accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
+
 
             logs = {
                 "loss_final": accelerator.gather(loss).mean().detach().item(),
@@ -412,9 +414,11 @@ def main(args):
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
             }
+            if args.use_sra:
+                logs["align_loss"] = accelerator.gather(align_loss_mean).mean().detach().item()
 
             log_message = ", ".join(f"{key}: {value:.6f}" for key, value in logs.items())
-            logging.info(f"Step: {global_step}, Training Logs: {log_message}")
+            # logging.info(f"Step: {global_step}, Training Logs: {log_message}")
 
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
@@ -490,6 +494,7 @@ def parse_args(input_args=None):
     parser.add_argument("--cls", type=float, default=0.03)
     parser.add_argument("--use-redi", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use-sra", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-dispersive-loss", action=argparse.BooleanOptionalAction, default=True)
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")

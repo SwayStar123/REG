@@ -1,19 +1,18 @@
 
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="2400000"
-SAVE_PATH="your_path/reg_xlarge_dinov2_base_align_8_cls/linear-dinov2-b-enc8"
-VAE_PATH="your_vae_path/"
+STEP="0100000"
+SAVE_PATH="exp/b2-reg_sra"
 NUM_STEP=250
-MODEL_SIZE='XL'
-CFG_SCALE=2.3
-CLS_CFG_SCALE=2.3
+MODEL_SIZE='B'
+CFG_SCALE=1.0
+CLS_CFG_SCALE=1.0
 GH=0.85
 
 export NCCL_P2P_DISABLE=1
 
 python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
-  --model SiT-XL/2 \
+  --model SiT-${MODEL_SIZE}/2 \
   --num-fid-samples 50000 \
   --ckpt ${SAVE_PATH}/checkpoints/${STEP}.pt \
   --path-type=linear \
@@ -26,11 +25,12 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --cls-cfg-scale=${CLS_CFG_SCALE} \
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
-  --cls=768
+  --cls=768 \
+  # --no-use-redi
 
 
 python ./evaluations/evaluator.py \
-    --ref_batch your_path/VIRTUAL_imagenet256_labeled.npz \
+    --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \
     --sample_batch ${SAVE_PATH}/checkpoints/SiT-${MODEL_SIZE}-2-${STEP}-size-256-vae-ema-cfg-${CFG_SCALE}-seed-0-sde-${GH}-${CLS_CFG_SCALE}.npz \
     --save_path ${SAVE_PATH}/checkpoints \
     --cfg_cond 1 \

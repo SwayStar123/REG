@@ -1,0 +1,53 @@
+REG+ReDI+SRA:
+    B/2 no CFG:
+        100k:
+            Inception Score: 28.437091827392578
+            FID: 56.58293269222713
+            sFID: 11.717571173354031
+            Precision: 0.44588
+            Recall: 0.5098
+        400k:
+            Inception Score: 66.71440124511719
+            FID: 25.568593791769104
+            sFID: 9.425152786367562
+            Precision: 0.58676
+            Recall: 0.5908
+        800k:
+            Inception Score: 81.63082885742188
+            FID: 19.77240102453044
+            sFID: 8.884480364463116
+            Precision: 0.61586
+            Recall: 0.6074
+    XL/2 no CFG:
+        400k:
+            Inception Score: 145.32504272460938
+            FID: 6.184016194896913
+            sFID: 5.5048554094562405
+            Precision: 0.72456
+            Recall: 0.6241
+        700k:
+            Inception Score: 159.3738555908203
+            FID: 5.016744486469634
+            sFID: 5.3645806474014535
+            Precision: 0.73442
+            Recall: 0.6393
+
+REG+SRA+Dispersive:
+    B/2 no CFG:
+        100k:
+            Inception Score: 43.00800704956055
+            FID: 37.32830695549916
+            sFID: 7.197382369934985
+            Precision: 0.51902
+            Recall: 0.6177
+
+REG+SRA:
+    B/2 no CFG:
+        100k:
+            Inception Score: 42.36689758300781
+            FID: 38.00449482585725
+            sFID: 7.187094026128989
+            Precision: 0.51432
+            Recall: 0.6183
+
+
