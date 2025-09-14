@@ -20,4 +20,5 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --cls=0.03 \
     --no-use-redi \
     --use-sra \
-    --use-dispersive-loss
+    --use-dispersive-loss \
+    --resume-step=180000

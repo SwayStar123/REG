@@ -40,6 +40,20 @@ REG+SRA+Dispersive:
             sFID: 7.197382369934985
             Precision: 0.51902
             Recall: 0.6177
+    XL/2 no CFG:
+        100k:
+            Inception Score: 121.5496826171875
+            FID: 9.073881521219732
+            sFID: 5.379664782501209
+            Precision: 0.70936
+            Recall: 0.6149
+        200k:
+            Inception Score: 155.50775146484375
+            FID: 5.230153062672571
+            sFID: 4.865220439682616
+            Precision: 0.73408
+            Recall: 0.6397
+
 
 REG+SRA:
     B/2 no CFG:

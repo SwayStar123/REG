@@ -1,10 +1,10 @@
 
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0100000"
-SAVE_PATH="exp/b2_reg_sra"
+STEP="0200000"
+SAVE_PATH="exp/xl2_reg_sra_dispersive"
 NUM_STEP=250
-MODEL_SIZE='B'
+MODEL_SIZE='XL'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=0.85
@@ -27,7 +27,7 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
   --no-use-redi \
-  --no-use-sra
+  # --no-use-sra
 
 
 python ./evaluations/evaluator.py \
