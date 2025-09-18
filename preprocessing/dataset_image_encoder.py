@@ -321,17 +321,17 @@ def encode(
     print("Data is over!!!")
     labels = []
 
-    cnm = []
-    cnm2 = []
+    temp_list1 = []
+    temp_list2 = []
     for idx, image in tqdm(enumerate(input_iter), total=num_files):
         with torch.no_grad():
             img_tensor = torch.tensor(image.img).to('cuda').permute(2, 0, 1).unsqueeze(0)
             raw_image_ = preprocess_raw_image(img_tensor, encoder_type)
             z = encoder.forward_features(raw_image_)
             if 'dinov2' in encoder_type: z = z['x_norm_patchtokens']
-            cnm.append(z)
+            temp_list1.append(z)
             z = z.detach().cpu().numpy()
-            cnm2.append(z)
+            temp_list2.append(z)
 
         idx_str = f'{idx:08d}'
         archive_fname = f'{idx_str[:5]}/img-feature-{idx_str}.npy'
@@ -348,5 +348,6 @@ def encode(
 
 if __name__ == "__main__":
     cmdline()
+
 
 #----------------------------------------------------------------------------
