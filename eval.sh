@@ -1,7 +1,7 @@
 
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="2400000"
+STEP="4000000"
 SAVE_PATH="your_path/reg_xlarge_dinov2_base_align_8_cls/linear-dinov2-b-enc8"
 VAE_PATH="your_vae_path/"
 NUM_STEP=250
