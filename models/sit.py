@@ -140,11 +140,23 @@ class FinalLayer(nn.Module):
     """
     The final layer of SiT.
     """
-    def __init__(self, hidden_size, patch_size, out_channels, cls_token_dim):
+    def __init__(self, hidden_size, patch_size, out_channels, cls_token_dim, use_mlp: bool = False):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-        self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
+        if use_mlp:
+            self.linear = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size*4),
+                nn.GELU(),
+                nn.Linear(hidden_size*4, patch_size * patch_size * out_channels),
+            )
+            self.linear_cls = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size*4),
+                nn.GELU(),
+                nn.Linear(hidden_size*4, cls_token_dim),
+            )
+        else:
+            self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+            self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
@@ -174,7 +186,6 @@ class SiT(nn.Module):
         patch_size=2,
         in_channels=4,
         hidden_size=1152,
-        decoder_hidden_size=768,
         encoder_depth=8,
         depth=28,
         num_heads=16,
@@ -185,6 +196,7 @@ class SiT(nn.Module):
         z_dims=[768],
         projector_dim=2048,
         cls_token_dim=768,
+        experiment="baseline",
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -198,11 +210,15 @@ class SiT(nn.Module):
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
 
+        # Input embedders
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
         self.t_embedder = TimestepEmbedder(hidden_size) # timestep embedding type
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
+        self.wg_norm = nn.LayerNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
@@ -215,12 +231,19 @@ class SiT(nn.Module):
             ])
 
         z_dim = self.z_dims[0]
-        cls_token_dim = z_dim
-        self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
+        self.cls_token_dim = z_dim
 
+        if experiment == "baseline":
+            self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
+        elif experiment == "final_layer_mlp":
+            self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim, use_mlp=True)
+        elif experiment == "multiple_final_layers":
+            self.final_layers = nn.ModuleList([
+                FinalLayer(hidden_size, patch_size//2, self.out_channels, self.cls_token_dim//4, use_mlp=True) for _ in range(4)
+            ])
 
-        self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
-        self.wg_norm = nn.LayerNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+        self.experiment = experiment
+
 
         self.initialize_weights()
 
@@ -309,7 +332,28 @@ class SiT(nn.Module):
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 
-        x, cls_token = self.final_layer(x, c, cls=cls_token)
+        if self.experiment == "multiple_final_layers":
+            # Splits the depatchify into 4 layers. So each final layer is responsible for a quarter of the patches.
+            # But the prediction is taken on the full hidden dim. So we get 4 predictions from the same hidden dim and then assemble them into the full patch.
+            # Similarly, the cls token dim is split into 4, where each final layer predicts a quarter of the cls token.
+            xs = []
+            cls_toks = []
+            for i, final_layer in enumerate(self.final_layers):
+                x, cls_token = final_layer(x, c, cls=cls_token)
+                xs.append(x)
+                cls_toks.append(cls_token)
+
+            x = torch.stack(xs)
+            cls_token = torch.stack(cls_toks)
+            # Must turn (4, N, T, (patch_size//2)**2 * C) into (N, T, patch_size**2 * C)
+            x = x.permute(1, 2, 0, 3).contiguous()
+            x = x.reshape(N, T, (self.patch_size)**2 * self.out_channels)
+
+            # Must turn (4, N, cls_token_dim//4) into (N, cls_token_dim)
+            cls_token = cls_token.permute(1, 0, 2).contiguous()
+            cls_token = cls_token.reshape(N, self.cls_token_dim)
+        else:
+            x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
 
         return x, zs, cls_token
@@ -375,31 +419,40 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def SiT_XL_2(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
 def SiT_XL_4(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
 
 def SiT_XL_8(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+
+def SiT_XL_16(**kwargs):
+    return SiT(depth=28, hidden_size=1152, patch_size=16, num_heads=16, **kwargs)
 
 def SiT_L_2(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
 def SiT_L_4(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
 def SiT_L_8(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+
+def SiT_L_16(**kwargs):
+    return SiT(depth=24, hidden_size=1024, patch_size=16, num_heads=16, **kwargs)
 
 def SiT_B_2(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
 def SiT_B_4(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
 
 def SiT_B_8(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+
+def SiT_B_16(**kwargs):
+    return SiT(depth=12, hidden_size=768, patch_size=16, num_heads=12, **kwargs)
 
 def SiT_S_2(**kwargs):
     return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
@@ -409,6 +462,9 @@ def SiT_S_4(**kwargs):
 
 def SiT_S_8(**kwargs):
     return SiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+
+def SiT_S_16(**kwargs):
+    return SiT(depth=12, hidden_size=384, patch_size=16, num_heads=6, **kwargs)
 
 
 SiT_models = {
