@@ -17,3 +17,6 @@ SiT-L/16 multiple final layers with skip connection:
 
 SiT-L/16 multiple final layers with skip connection input:
     SiT Parameters: 670,055,680 - ~3.00 it/s
+
+SiT-L/16 multiple final layers with skip connection input using multiple transformer blocks:
+    SiT Parameters: 670,055,680 - ~3.10 it/s

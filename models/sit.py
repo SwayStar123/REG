@@ -385,10 +385,17 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
+        num_blocks = len(self.blocks)
+        latents = []
         for i, block in enumerate(self.blocks):
             x = block(x, c)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+            if (i+1) <= num_blocks - 4:
+                latents.append(x)
+        latents = torch.stack(latents)
+        # Repeat the latents 4 times, so that it is [a, b, c, d] to [a,a,a,a,b,b,b,b,c,c,c,c,d,d,d,d]
+        latents = latents.repeat_interleave(4, dim=0)
 
         if self.experiment == "multiple_final_layers" or self.experiment == "multiple_final_layers_with_skip":
             # Splits the depatchify into 4 layers. So each final layer is responsible for a quarter of the patches.
@@ -396,7 +403,7 @@ class SiT(nn.Module):
             # Similarly, the cls token dim is split into 4, where each final layer predicts a quarter of the cls token.
             xs = []
             cls_toks = []
-            for i, final_layer in enumerate(self.final_layers):
+            for i, (final_layer, x) in enumerate(zip(self.final_layers, latents)):
                 if self.experiment == "multiple_final_layers_with_skip":
                     x_input = torch.cat((x,skip_xs[i]), dim=-1)
                 else:
