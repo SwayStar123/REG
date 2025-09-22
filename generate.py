@@ -61,13 +61,14 @@ def main(args):
 
     # Load model:
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
-    latent_size = args.resolution // 8
     model = SiT_models[args.model](
-        input_size=latent_size,
+        input_size=args.resolution,
         num_classes=args.num_classes,
         use_cfg = True,
         z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
         encoder_depth=args.encoder_depth,
+        in_channels=3,
+        experiment=args.experiment,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -93,14 +94,11 @@ def main(args):
 
 
     model.eval()  # important!
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
-    #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path="your_local_path/weight/").to(device)
-
 
     # Create folder to save samples:
     model_string_name = args.model.replace("/", "-")
     ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
-    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-{args.vae}-" \
+    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-" \
                   f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}"
     sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
@@ -126,7 +124,7 @@ def main(args):
     total = 0
     for _ in pbar:
         # Sample inputs:
-        z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
+        z = torch.randn(n, model.in_channels, args.resolution, args.resolution, device=device)
         y = torch.randint(0, args.num_classes, (n,), device=device)
         cls_z = torch.randn(n, args.cls, device=device)
 
@@ -153,13 +151,6 @@ def main(args):
             else:
                 raise NotImplementedError()
 
-            latents_scale = torch.tensor(
-                [0.18215, 0.18215, 0.18215, 0.18215, ]
-                ).view(1, 4, 1, 1).to(device)
-            latents_bias = -torch.tensor(
-                [0., 0., 0., 0.,]
-                ).view(1, 4, 1, 1).to(device)
-            samples = vae.decode((samples -  latents_bias) / latents_scale).sample
             samples = (samples + 1) / 2.
             samples = torch.clamp(
                 255. * samples, 0, 255
@@ -200,8 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
-    # vae
-    parser.add_argument("--vae",  type=str, choices=["ema", "mse"], default="ema")
+    parser.add_argument("--experiment", type=str, default="baseline", choices=["baseline", "final_layer_mlp", "multiple_final_layers"])
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)

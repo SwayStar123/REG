@@ -30,6 +30,8 @@ import math
 from torchvision.utils import make_grid
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision.transforms import Normalize
+from samplers import euler_maruyama_sampler
+from PIL import Image
 
 logger = get_logger(__name__)
 
@@ -166,7 +168,8 @@ def main(args):
     z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
-        input_size=latent_size,
+        input_size=args.resolution,
+        in_channels=3,
         num_classes=args.num_classes,
         use_cfg = (args.cfg_prob > 0),
         z_dims = z_dims,
@@ -269,23 +272,26 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     sample_batch_size = 64 // accelerator.num_processes
-    gt_raw_images, gt_xs, _ = next(iter(train_dataloader))
+    gt_raw_images, _ = next(iter(train_dataloader))
     assert gt_raw_images.shape[-1] == args.resolution
-    gt_xs = gt_xs[:sample_batch_size]
-    gt_xs = sample_posterior(
-        gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
-        )
+    gt_xs = (gt_raw_images.to(device) / 255.0) * 2.0 - 1.0
+    gt_xs = gt_xs.to(device)
     ys = torch.randint(1000, size=(sample_batch_size,), device=device)
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
-    xT = torch.randn((n, 4, latent_size, latent_size), device=device)
+    xT = torch.randn((n, 3, args.resolution, args.resolution), device=device)
+    cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+
+    if accelerator.is_main_process:
+        sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
+        os.makedirs(sample_dir, exist_ok=True)
         
     for epoch in range(args.epochs):
         model.train()
-        for raw_image, x, y in train_dataloader:
+        for raw_image, y in train_dataloader:
             raw_image = raw_image.to(device)
-            x = x.squeeze(dim=1).to(device)
+            x = (raw_image / 255.0) * 2.0 - 1.0
             y = y.to(device)
             z = None
             if args.legacy:
@@ -297,7 +303,6 @@ def main(args):
             else:
                 labels = y
             with torch.no_grad():
-                x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
                 zs = []
                 with accelerator.autocast():
                     for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
@@ -351,7 +356,34 @@ def main(args):
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
             if (global_step == 1 or (global_step % args.sampling_steps == 0 and global_step > 0)):
-                logging.info("Generating EMA samples done.")
+                with torch.no_grad():
+                    ema.eval()
+                    sampling_kwargs = dict(
+                        model=ema,
+                        latents=xT.clone(),
+                        y=ys.clone(),
+                        num_steps=args.num_sample_steps,
+                        heun=False,
+                        cfg_scale=args.cfg_scale,
+                        guidance_low=args.guidance_low,
+                        guidance_high=args.guidance_high,
+                        path_type=args.path_type,
+                        cls_latents=cls_z.clone(),
+                        args=args,
+                    )
+                    samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+
+                    # decode to pixels
+                    samples = (samples + 1) / 2.
+                    samples = samples.clamp(0, 1)
+                    accelerator.wait_for_everyone()
+                    gathered = accelerator.gather(samples)
+                    if accelerator.is_main_process:
+                        grid = array2grid(gathered)
+                        Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")
+                        logger.info(f"Saved samples at step {global_step}")
+                        if global_step % 50000 == 0:
+                            accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
 
             logs = {
                 "loss_final": accelerator.gather(loss).mean().detach().item(),
@@ -388,7 +420,7 @@ def parse_args(input_args=None):
     parser.add_argument("--exp-name", type=str, required=True)
     parser.add_argument("--logging-dir", type=str, default="logs")
     parser.add_argument("--report-to", type=str, default="wandb")
-    parser.add_argument("--sampling-steps", type=int, default=10000)
+    parser.add_argument("--sampling-steps", type=int, default=1000)
     parser.add_argument("--resume-step", type=int, default=0)
 
     # model
@@ -398,7 +430,7 @@ def parse_args(input_args=None):
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
-    parser.add_argument("--experiment", type=str, default="baseline", choices=["baseline", "final_layer_mlp", "multiple_final_layers"])
+    parser.add_argument("--experiment", type=str, default="baseline", choices=["baseline", "final_layer_mlp", "multiple_final_layers", "multiple_final_layers_with_skip"])
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
@@ -436,6 +468,13 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+
+    # sampling specific
+    parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
+    parser.add_argument("--cls-cfg-scale", type=float, default=1.0, help="CLS guidance scale (used inside sampler).")
+    parser.add_argument("--guidance-low", type=float, default=0.0)
+    parser.add_argument("--guidance-high", type=float, default=1.0)
+    parser.add_argument("--num-sample-steps", type=int, default=50, help="Diffusion sampling steps for in-training sampling.")
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:

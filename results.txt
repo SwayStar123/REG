@@ -1,0 +1,19 @@
+SiT-L/16 baseline:
+    SiT Parameters: 469,074,176 ~4.5 it/s
+    projector Parameters: 7,869,184
+
+    FID @ 200k no CFG:
+        Inception Score: 17.747516632080078
+        FID: 84.04445923344349
+        sFID: 15.70464125312833
+        Precision: 0.2746
+        Recall: 0.4276
+
+SiT-L/16 multiple final layers: 
+    SiT Parameters: 639,629,568 - ~3.35 it/s
+
+SiT-L/16 multiple final layers with skip connection:
+    SiT Parameters: 639,679,744 - ~3.12 it/s
+
+SiT-L/16 multiple final layers with skip connection input:
+    SiT Parameters: 670,055,680 - ~3.00 it/s
