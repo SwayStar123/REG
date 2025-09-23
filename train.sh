@@ -15,7 +15,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --proj-coeff=0.5 \
     --encoder-depth=8 \
     --output-dir="exps" \
-    --exp-name="l16-actual-pixnerd" \
+    --exp-name="l16-pixelnerd_type_thing" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \

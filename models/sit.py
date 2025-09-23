@@ -239,34 +239,6 @@ class NerfEmbedder(nn.Module):
         inputs = self.embedder(inputs)
         return inputs
 
-class NerfBlock(nn.Module):
-    def __init__(self, hidden_size_s, hidden_size_x, mlp_ratio=4):
-        super().__init__()
-        self.param_generator1 = nn.Sequential(
-            nn.Linear(hidden_size_s, 2*hidden_size_x**2*mlp_ratio, bias=True),
-        )
-        self.norm = RMSNorm(hidden_size_x, eps=1e-6)
-        self.mlp_ratio = mlp_ratio
-    def forward(self, x, s):
-        batch_size, num_x, hidden_size_x = x.shape
-        mlp_params1 = self.param_generator1(s)
-        fc1_param1, fc2_param1 = mlp_params1.chunk(2, dim=-1)
-        fc1_param1 = fc1_param1.view(batch_size, hidden_size_x, hidden_size_x*self.mlp_ratio)
-        fc2_param1 = fc2_param1.view(batch_size, hidden_size_x*self.mlp_ratio, hidden_size_x)
-
-        # normalize fc1
-        normalized_fc1_param1 = torch.nn.functional.normalize(fc1_param1, dim=-2)
-        # normalize fc2
-        normalized_fc2_param1 = torch.nn.functional.normalize(fc2_param1, dim=-2)
-        # mlp 1
-        res_x = x
-        x = self.norm(x)
-        x = torch.bmm(x, normalized_fc1_param1)
-        x = torch.nn.functional.silu(x)
-        x = torch.bmm(x, normalized_fc2_param1)
-        x = x + res_x
-        return x
-
 class SiT(nn.Module):
     """
     Diffusion model with a Transformer backbone.
@@ -305,7 +277,7 @@ class SiT(nn.Module):
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
-        self.pixel_embedder = NerfEmbedder(in_channels, 64, max_freqs=8)
+        self.subpatch_embedder = NerfEmbedder(16*in_channels, 1024, max_freqs=8)
         self.t_embedder = TimestepEmbedder(hidden_size) # timestep embedding type
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
@@ -316,12 +288,8 @@ class SiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth-4)
+            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
         ])
-        self.blocks.extend([
-            NerfBlock(hidden_size, 64, 2) for _ in range(4)
-        ])
-
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
             ])
@@ -329,8 +297,16 @@ class SiT(nn.Module):
         z_dim = self.z_dims[0]
         self.cls_token_dim = z_dim
 
+        self.pixel_calculators = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size+1024, 1024),
+                nn.GELU(),
+                nn.Linear(1024,1024)
+            ) for _ in range(4)
+        ])
+
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
-        self.nerf_final_layer = NerfFinalLayer(64, self.out_channels)
+        self.nerf_final_layer = NerfFinalLayer(1024, 16*self.out_channels)
 
         self.initialize_weights()
 
@@ -363,9 +339,8 @@ class SiT(nn.Module):
 
         # Zero-out adaLN modulation layers in SiT blocks:
         for block in self.blocks:
-            if isinstance(block, SiTBlock):
-                nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-                nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
@@ -401,9 +376,11 @@ class SiT(nn.Module):
         N, C, H, W = x.shape
 
         patches = x.view(N, C, H//self.patch_size, self.patch_size, W//self.patch_size, self.patch_size)
-        # N, C, H/P, P, W/P, P -> N*H/P*W/P, P*P, C
-        patches = patches.permute(0, 2, 4, 3, 5, 1).reshape(-1, self.patch_size**2, C)
-        pixel_embeddings = self.pixel_embedder(patches)  # (N, H*W, D')
+        # N, C, H/P, P, W/P, P -> N*H/P*W/P, P,P, C
+        patches = patches.permute(0, 2, 4, 3, 5, 1).reshape(-1, self.patch_size, self.patch_size, C)
+        # (BS * SEQ, P,P, C) -> (BS * SEQ, P/4, 4, P/4, 4, C) -> (.., P/4, P/4, 16*C)
+        patches = patches.view(-1, self.patch_size//4, 4, self.patch_size//4, 4, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, (self.patch_size//4)**2, 16*C)
+        subpatch_embeddings = self.subpatch_embedder(patches)  # (N, H*W, D')
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
@@ -425,11 +402,17 @@ class SiT(nn.Module):
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 
-        for block in self.blocks[-4:]:
-            pixel_embeddings = block(pixel_embeddings, x[:, 1:].reshape(-1, D))
+        for (block, pixel_calculator) in zip(self.blocks[-4:], self.pixel_calculators):
+            x = block(x, c)
+            latent = x[:, 1:] # (N, T-1, D)
+            # (N, T, D) -> (N, T, P*P, D)  Repeat the latent p*p times to match pixel embeddings
+            latent = latent.unsqueeze(2).repeat(1, 1, (self.patch_size//4)**2, 1).reshape(-1, (self.patch_size//4)**2, D)
+            subpatch_embeddings = pixel_calculator(torch.cat([latent, subpatch_embeddings], dim=-1))
         
         _, cls_token = self.final_layer(x, c, cls=cls_token)
-        x = self.nerf_final_layer(pixel_embeddings)  # (N*H/P*W/P, P*P, C)
+        x = self.nerf_final_layer(subpatch_embeddings)  # (N*H/P*W/P, P//4*P//4, 16*C)
+        # (N*H/P*W/P, P//4*P//4, 16*C) -> (N*H/P*W/P, P*P, C)
+        x = x.view(-1, (self.patch_size//4), (self.patch_size//4), 4, 4, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, self.patch_size**2, C)
         x = x.transpose(1, 2).reshape(N, T-1, -1)
         x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=self.patch_size, stride=self.patch_size)
 

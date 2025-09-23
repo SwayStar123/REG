@@ -374,9 +374,9 @@ def main(args):
 
                     # decode to pixels
                     samples = (samples + 1) / 2.
-                    samples = samples.clamp(0, 1)
+                    samples = samples.clamp(0, 1).contiguous()
                     accelerator.wait_for_everyone()
-                    gathered = accelerator.gather(samples)
+                    gathered = accelerator.gather(samples).contiguous()
                     if accelerator.is_main_process:
                         grid = array2grid(gathered)
                         Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")

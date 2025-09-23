@@ -33,3 +33,6 @@ SiT-L/16 nerf_type_thing
 SiT-L/16 actual-pixnerd
     SiT Parameters: 468,882,179 - ~2.73 it/s
 
+SiT-L/16 pixnerd-type-thing-subpatch-4
+    SiT Parameters: 481,044,016 - ~3.2 it/s
+
