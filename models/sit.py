@@ -159,7 +159,7 @@ class FinalLayer(nn.Module):
             self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size //2, hidden_size * 2, bias=True)
+            nn.Linear(hidden_size, hidden_size * 2, bias=True)
         )
 
     def forward(self, x, c, cls=None):
@@ -196,7 +196,6 @@ class SiT(nn.Module):
         z_dims=[768],
         projector_dim=2048,
         cls_token_dim=768,
-        experiment="baseline",
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -233,39 +232,18 @@ class SiT(nn.Module):
         z_dim = self.z_dims[0]
         self.cls_token_dim = z_dim
 
-        if experiment == "baseline":
-            self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
-        elif experiment == "final_layer_mlp":
-            self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim, use_mlp=True)
-        elif experiment == "multiple_final_layers":
-            self.final_layers = nn.ModuleList([
-                FinalLayer(hidden_size, patch_size//4, self.out_channels, self.cls_token_dim//16, use_mlp=True) for _ in range(16)
-            ])
-        elif experiment == "multiple_final_layers_with_skip":
-            self.final_layers = nn.ModuleList([
-                FinalLayer(hidden_size*2, patch_size//4, self.out_channels, self.cls_token_dim//16, use_mlp=True) for _ in range(16)
-            ])
-            self.skip_embedding = PatchEmbed(input_size, patch_size//4, self.out_channels, hidden_size, bias=True)
-        elif experiment == "hypernetwork1":
-            # Each token (256) generates 1/N of the hypernetwork.
-            num_params = ((hidden_size // 2) * (hidden_size // 2)) + ((hidden_size // 2) * ((patch_size//4)**2 * self.out_channels))
-            params_per_token = num_params // 256
-            self.param_generator = nn.Linear(hidden_size, params_per_token, bias=True)
-
-            self.adaLN_modulation = nn.Sequential(
-                nn.SiLU(),
-                nn.Linear(hidden_size //2, hidden_size * 2, bias=True)
-            )
-
-            self.skip_embedding = PatchEmbed(input_size, patch_size//4, self.out_channels, hidden_size//2, bias=True)
-            self.cls_final_layer = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),
-                nn.GELU(),
-                nn.Linear(hidden_size, self.cls_token_dim),
-            )
-        
-
-        self.experiment = experiment
+        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
+        patch_dim = patch_size * patch_size * self.out_channels
+        self.final_final_layer = nn.Sequential(
+            nn.Linear(patch_dim * 2, patch_dim * 2),
+            nn.GELU(),
+            nn.Linear(patch_dim * 2, patch_dim),
+        )
+        self.final_final_layer_cls = nn.Sequential(
+            nn.Linear(cls_token_dim * 2, cls_token_dim * 2),
+            nn.GELU(),
+            nn.Linear(cls_token_dim * 2, cls_token_dim),
+        )
 
 
         self.initialize_weights()
@@ -303,30 +281,12 @@ class SiT(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
-        if self.experiment == "multiple_final_layers" or self.experiment == "multiple_final_layers_with_skip":
-            for final_layer in self.final_layers:
-                nn.init.constant_(final_layer.adaLN_modulation[-1].weight, 0)
-                nn.init.constant_(final_layer.adaLN_modulation[-1].bias, 0)
-                # For Sequential modules, initialize the last layer
-                nn.init.constant_(final_layer.linear[-1].weight, 0)
-                nn.init.constant_(final_layer.linear[-1].bias, 0)
-                nn.init.constant_(final_layer.linear_cls[-1].weight, 0)
-                nn.init.constant_(final_layer.linear_cls[-1].bias, 0)
-        elif self.experiment == "final_layer_mlp":
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-            # For Sequential modules, initialize the last layer
-            nn.init.constant_(self.final_layer.linear[-1].weight, 0)
-            nn.init.constant_(self.final_layer.linear[-1].bias, 0)
-            nn.init.constant_(self.final_layer.linear_cls[-1].weight, 0)
-            nn.init.constant_(self.final_layer.linear_cls[-1].bias, 0)
-        else:
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-            nn.init.constant_(self.final_layer.linear.weight, 0)
-            nn.init.constant_(self.final_layer.linear.bias, 0)
-            nn.init.constant_(self.final_layer.linear_cls.weight, 0)
-            nn.init.constant_(self.final_layer.linear_cls.bias, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_final_layer[-1].weight, 0)
+        nn.init.constant_(self.final_final_layer[-1].bias, 0)
+        nn.init.constant_(self.final_final_layer_cls[-1].weight, 0)
+        nn.init.constant_(self.final_final_layer_cls[-1].bias, 0)
 
     def unpatchify(self, x, patch_size=None):
         """
@@ -350,25 +310,16 @@ class SiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
-        if self.experiment == "multiple_final_layers_with_skip":
-            # (N, C, H, W) -> (N, H/(patch_size//4)**2 * W/(patch_size//4)**2, hidden_size)
-            skip_x = self.skip_embedding(x)
-            # Turn into (16, N, H/patch_size**2 * W/patch_size**2, hidden_size)
-            N, _, D = skip_x.shape
-            h = w = int(skip_x.shape[1] ** 0.5)  # number of 4x4 patches per side
-            
-            # Reshape and reorder to group by position within each 16x16 block
-            skip_x = skip_x.reshape(N, h//4, 4, w//4, 4, D)
-            skip_x = skip_x.permute(2, 4, 0, 1, 3, 5).reshape(16, N, -1, D)
-            
-            # Add cls token padding
-            cls_pad = torch.zeros(16, N, 1, D, device=skip_x.device, dtype=skip_x.dtype)
-            skip_xs = torch.cat([cls_pad, skip_x], dim=2)
-        
-        elif self.experiment == "hypernetwork1":
-            skip_x = self.skip_embedding(x)  # (N, H/(patch_size//4)**2 * W/(patch_size//4)**2, hidden_size//2)
-
         #cat with cls_token
+        N, C, H, W = x.shape
+        skip_x = x
+        skip_cls = cls_token
+
+        # Patchify
+        skip_x = skip_x.view(N, C, H // self.patch_size, self.patch_size, W // self.patch_size, self.patch_size)
+        skip_x = skip_x.permute(0, 2, 4, 1, 3, 5).contiguous()
+        skip_x = skip_x.view(N, -1, C * self.patch_size * self.patch_size)  # [b, length, p*p*c]
+
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
@@ -394,37 +345,21 @@ class SiT(nn.Module):
             if (i+1) <= num_blocks - 4:
                 latents.append(x)
         latents = torch.stack(latents)
-        # Repeat the latents 4 times, so that it is [a, b, c, d] to [a,a,a,a,b,b,b,b,c,c,c,c,d,d,d,d]
-        latents = latents.repeat_interleave(4, dim=0)
 
-        if self.experiment == "multiple_final_layers" or self.experiment == "multiple_final_layers_with_skip":
-            # Splits the depatchify into 4 layers. So each final layer is responsible for a quarter of the patches.
-            # But the prediction is taken on the full hidden dim. So we get 4 predictions from the same hidden dim and then assemble them into the full patch.
-            # Similarly, the cls token dim is split into 4, where each final layer predicts a quarter of the cls token.
-            xs = []
-            cls_toks = []
-            for i, (final_layer, x) in enumerate(zip(self.final_layers, latents)):
-                if self.experiment == "multiple_final_layers_with_skip":
-                    x_input = torch.cat((x,skip_xs[i]), dim=-1)
-                else:
-                    x_input = x
-                x_, cls_token_ = final_layer(x_input, c, cls=cls_token)
-                xs.append(x_)
-                cls_toks.append(cls_token_)
+        x_out = torch.zeros_like(skip_x)
+        cls_out = torch.zeros_like(skip_cls)
+        for latent in latents:
+            x_out_, cls_out_ = self.final_layer(latent, c, cls=cls_token)
+            x_out = x_out + x_out_
+            cls_out = cls_out + cls_out_
+        # x = x_out / latents.shape[0]
+        # cls_token = cls_out / latents.shape[0]
+        x = x_out
+        cls_token = cls_out
 
-            x = torch.stack(xs)
-            cls_token = torch.stack(cls_toks)
-            # Must turn (16, N, T, (patch_size//4)**2 * C) into (N, T, patch_size**2 * C)
-            x = x.permute(1, 2, 0, 3).contiguous()
-            x = x.reshape(N, T-1, (self.patch_size)**2 * self.out_channels)
-
-
-            # Must turn (4, N, cls_token_dim//4) into (N, cls_token_dim)
-            cls_token = cls_token.permute(1, 0, 2).contiguous()
-            cls_token = cls_token.reshape(N, self.cls_token_dim)
-            
-        else:
-            x, cls_token = self.final_layer(x, c, cls=cls_token)
+        x = self.final_final_layer(torch.cat((x, skip_x), dim=-1))
+        cls_token = self.final_final_layer_cls(torch.cat((cls_token, skip_cls), dim=-1))
+        
         x = self.unpatchify(x)
 
         return x, zs, cls_token

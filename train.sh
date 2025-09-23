@@ -15,11 +15,10 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --proj-coeff=0.5 \
     --encoder-depth=8 \
     --output-dir="exps" \
-    --exp-name="l16-multiple_final_layers_with_skip_input_use_multiple_transformer_blocks" \
+    --exp-name="l16-use_multiple_finals_to_calc_output_with_skip" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --experiment="multiple_final_layers_with_skip"
 
 
     #Dataset Path

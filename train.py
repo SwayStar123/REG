@@ -174,7 +174,6 @@ def main(args):
         use_cfg = (args.cfg_prob > 0),
         z_dims = z_dims,
         encoder_depth=args.encoder_depth,
-        experiment=args.experiment,
         **block_kwargs
     )
 
@@ -430,7 +429,6 @@ def parse_args(input_args=None):
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
-    parser.add_argument("--experiment", type=str, default="baseline", choices=["baseline", "final_layer_mlp", "multiple_final_layers", "multiple_final_layers_with_skip"])
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
