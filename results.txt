@@ -26,3 +26,10 @@ SiT-L/16 use_multiple_finals_to_calc_output_with_skip
 
 SiT-L/16 mult-final-with-repeat-input-to-transf-blocks
     SiT Parameters: 476,156,672 - ~4.33 it/s
+
+SiT-L/16 nerf_type_thing
+    SiT Parameters: 468,882,179 - ~4.33 it/s
+
+SiT-L/16 actual-pixnerd
+    SiT Parameters: 468,882,179 - ~2.73 it/s
+

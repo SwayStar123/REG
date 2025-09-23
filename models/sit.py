@@ -6,6 +6,7 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+from functools import lru_cache
 import torch
 import torch.nn as nn
 import numpy as np
@@ -144,18 +145,18 @@ class FinalLayer(nn.Module):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         if use_mlp:
-            self.linear = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),
-                nn.GELU(),
-                nn.Linear(hidden_size, patch_size * patch_size * out_channels),
-            )
+            # self.linear = nn.Sequential(
+            #     nn.Linear(hidden_size, hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(hidden_size, patch_size * patch_size * out_channels),
+            # )
             self.linear_cls = nn.Sequential(
                 nn.Linear(hidden_size, hidden_size),
                 nn.GELU(),
                 nn.Linear(hidden_size, cls_token_dim),
             )
         else:
-            self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+            # self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
             self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
@@ -171,9 +172,100 @@ class FinalLayer(nn.Module):
             return x, None
         else:
             cls_token = self.linear_cls(x[:, 0]).unsqueeze(1)
-            x = self.linear(x[:, 1:])
+            # x = self.linear(x[:, 1:])
             return x, cls_token.squeeze(1)
 
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        LlamaRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+class NerfFinalLayer(nn.Module):
+    def __init__(self, hidden_size, out_channels):
+        super().__init__()
+        self.norm = RMSNorm(hidden_size, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, out_channels, bias=True)
+    def forward(self, x):
+        x = self.norm(x)
+        x = self.linear(x)
+        return x
+
+class NerfEmbedder(nn.Module):
+    def __init__(self, in_channels, hidden_size_input, max_freqs):
+        super().__init__()
+        self.max_freqs = max_freqs
+        self.hidden_size_input = hidden_size_input
+        self.embedder = nn.Sequential(
+            nn.Linear(in_channels+max_freqs**2, hidden_size_input, bias=True),
+        )
+
+    @lru_cache
+    def fetch_pos(self, patch_size, device, dtype):
+        pos_x = torch.linspace(0, 1, patch_size, device=device, dtype=dtype)
+        pos_y = torch.linspace(0, 1, patch_size, device=device, dtype=dtype)
+        pos_y, pos_x = torch.meshgrid(pos_y, pos_x, indexing="ij")
+        pos_x = pos_x.reshape(-1, 1, 1)
+        pos_y = pos_y.reshape(-1, 1, 1)
+
+        freqs = torch.linspace(0, self.max_freqs, self.max_freqs, dtype=dtype, device=device)
+        freqs_x = freqs[None, :, None]
+        freqs_y = freqs[None, None, :]
+        coeffs = (1 + freqs_x * freqs_y) ** -1
+        dct_x = torch.cos(pos_x * freqs_x * torch.pi)
+        dct_y = torch.cos(pos_y * freqs_y * torch.pi)
+        dct = (dct_x * dct_y * coeffs).view(1, -1, self.max_freqs ** 2)
+        return dct
+
+
+    def forward(self, inputs):
+        B, P2, C = inputs.shape
+        patch_size = int(P2 ** 0.5)
+        device = inputs.device
+        dtype = inputs.dtype
+        dct = self.fetch_pos(patch_size, device, dtype)
+        dct = dct.repeat(B, 1, 1)
+        inputs = torch.cat([inputs, dct], dim=-1)
+        inputs = self.embedder(inputs)
+        return inputs
+
+class NerfBlock(nn.Module):
+    def __init__(self, hidden_size_s, hidden_size_x, mlp_ratio=4):
+        super().__init__()
+        self.param_generator1 = nn.Sequential(
+            nn.Linear(hidden_size_s, 2*hidden_size_x**2*mlp_ratio, bias=True),
+        )
+        self.norm = RMSNorm(hidden_size_x, eps=1e-6)
+        self.mlp_ratio = mlp_ratio
+    def forward(self, x, s):
+        batch_size, num_x, hidden_size_x = x.shape
+        mlp_params1 = self.param_generator1(s)
+        fc1_param1, fc2_param1 = mlp_params1.chunk(2, dim=-1)
+        fc1_param1 = fc1_param1.view(batch_size, hidden_size_x, hidden_size_x*self.mlp_ratio)
+        fc2_param1 = fc2_param1.view(batch_size, hidden_size_x*self.mlp_ratio, hidden_size_x)
+
+        # normalize fc1
+        normalized_fc1_param1 = torch.nn.functional.normalize(fc1_param1, dim=-2)
+        # normalize fc2
+        normalized_fc2_param1 = torch.nn.functional.normalize(fc2_param1, dim=-2)
+        # mlp 1
+        res_x = x
+        x = self.norm(x)
+        x = torch.bmm(x, normalized_fc1_param1)
+        x = torch.nn.functional.silu(x)
+        x = torch.bmm(x, normalized_fc2_param1)
+        x = x + res_x
+        return x
 
 class SiT(nn.Module):
     """
@@ -213,6 +305,7 @@ class SiT(nn.Module):
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
+        self.pixel_embedder = NerfEmbedder(in_channels, 64, max_freqs=8)
         self.t_embedder = TimestepEmbedder(hidden_size) # timestep embedding type
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
@@ -223,8 +316,12 @@ class SiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
+            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth-4)
         ])
+        self.blocks.extend([
+            NerfBlock(hidden_size, 64, 2) for _ in range(4)
+        ])
+
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
             ])
@@ -233,18 +330,7 @@ class SiT(nn.Module):
         self.cls_token_dim = z_dim
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
-        patch_dim = patch_size * patch_size * self.out_channels
-        self.final_final_layer = nn.Sequential(
-            nn.Linear(patch_dim * 2, patch_dim * 2),
-            nn.GELU(),
-            nn.Linear(patch_dim * 2, patch_dim),
-        )
-        self.final_final_layer_cls = nn.Sequential(
-            nn.Linear(cls_token_dim * 2, cls_token_dim * 2),
-            nn.GELU(),
-            nn.Linear(cls_token_dim * 2, cls_token_dim),
-        )
-
+        self.nerf_final_layer = NerfFinalLayer(64, self.out_channels)
 
         self.initialize_weights()
 
@@ -277,16 +363,17 @@ class SiT(nn.Module):
 
         # Zero-out adaLN modulation layers in SiT blocks:
         for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+            if isinstance(block, SiTBlock):
+                nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+                nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_final_layer[-1].weight, 0)
-        nn.init.constant_(self.final_final_layer[-1].bias, 0)
-        nn.init.constant_(self.final_final_layer_cls[-1].weight, 0)
-        nn.init.constant_(self.final_final_layer_cls[-1].bias, 0)
+        nn.init.constant_(self.nerf_final_layer.linear.weight, 0)
+        nn.init.constant_(self.nerf_final_layer.linear.bias, 0)
+        nn.init.constant_(self.final_layer.linear_cls.weight, 0)
+        nn.init.constant_(self.final_layer.linear_cls.bias, 0)
 
     def unpatchify(self, x, patch_size=None):
         """
@@ -312,14 +399,11 @@ class SiT(nn.Module):
         """
         #cat with cls_token
         N, C, H, W = x.shape
-        skip_x = x
-        skip_cls = cls_token
 
-        # Patchify
-        skip_x = skip_x.view(N, C, H // self.patch_size, self.patch_size, W // self.patch_size, self.patch_size)
-        skip_x = skip_x.permute(0, 2, 4, 1, 3, 5).contiguous()
-        skip_x = skip_x.view(N, -1, C * self.patch_size * self.patch_size)  # [b, length, p*p*c]
-
+        patches = x.view(N, C, H//self.patch_size, self.patch_size, W//self.patch_size, self.patch_size)
+        # N, C, H/P, P, W/P, P -> N*H/P*W/P, P*P, C
+        patches = patches.permute(0, 2, 4, 3, 5, 1).reshape(-1, self.patch_size**2, C)
+        pixel_embeddings = self.pixel_embedder(patches)  # (N, H*W, D')
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
@@ -336,38 +420,18 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
-        input_latents = []
-        for block in self.blocks[:4]:
-            input_latent = block(x, c)
-            input_latents.append(input_latent)
-        input_latents = torch.stack(input_latents)
-
-        for i, block in enumerate(self.blocks[4:-4]):
+        for i, block in enumerate(self.blocks[:-4]):
             x = block(x, c)
-            if (i + 5) == self.encoder_depth:
+            if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 
-        latents = []
-        for (block, input_latent) in zip(self.blocks[-4:], input_latents):
-            latent = block(x + input_latent, c)
-            latents.append(latent)
-        latents = torch.stack(latents)
-
-        x_out = torch.zeros_like(skip_x)
-        cls_out = torch.zeros_like(skip_cls)
-        for latent in latents:
-            x_out_, cls_out_ = self.final_layer(latent, c, cls=cls_token)
-            x_out = x_out + x_out_
-            cls_out = cls_out + cls_out_
-        # x = x_out / latents.shape[0]
-        # cls_token = cls_out / latents.shape[0]
-        x = x_out
-        cls_token = cls_out
-
-        x = self.final_final_layer(torch.cat((x, skip_x), dim=-1))
-        cls_token = self.final_final_layer_cls(torch.cat((cls_token, skip_cls), dim=-1))
+        for block in self.blocks[-4:]:
+            pixel_embeddings = block(pixel_embeddings, x[:, 1:].reshape(-1, D))
         
-        x = self.unpatchify(x)
+        _, cls_token = self.final_layer(x, c, cls=cls_token)
+        x = self.nerf_final_layer(pixel_embeddings)  # (N*H/P*W/P, P*P, C)
+        x = x.transpose(1, 2).reshape(N, T-1, -1)
+        x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=self.patch_size, stride=self.patch_size)
 
         return x, zs, cls_token
 
