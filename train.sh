@@ -15,7 +15,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --proj-coeff=0.5 \
     --encoder-depth=8 \
     --output-dir="exps" \
-    --exp-name="l16-use_multiple_finals_to_calc_output_with_skip" \
+    --exp-name="l16-mult-final-with-repeat-input-to-transf-blocks" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
