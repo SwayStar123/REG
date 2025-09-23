@@ -25,4 +25,4 @@ SiT-L/16 use_multiple_finals_to_calc_output_with_skip
     SiT Parameters: 476,156,672 - ~4.09 it/s
 
 SiT-L/16 mult-final-with-repeat-input-to-transf-blocks
-    SiT Parameters: 476,156,672
+    SiT Parameters: 476,156,672 - ~4.33 it/s

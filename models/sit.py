@@ -336,14 +336,20 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
-        for i, block in enumerate(self.blocks[:-4]):
+        input_latents = []
+        for block in self.blocks[:4]:
+            input_latent = block(x, c)
+            input_latents.append(input_latent)
+        input_latents = torch.stack(input_latents)
+
+        for i, block in enumerate(self.blocks[4:-4]):
             x = block(x, c)
-            if (i + 1) == self.encoder_depth:
+            if (i + 5) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 
         latents = []
-        for i, block in enumerate(self.blocks[-4:]):
-            latent = block(x, c)
+        for (block, input_latent) in zip(self.blocks[-4:], input_latents):
+            latent = block(x + input_latent, c)
             latents.append(latent)
         latents = torch.stack(latents)
 
