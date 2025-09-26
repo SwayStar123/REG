@@ -36,3 +36,11 @@ SiT-L/16 actual-pixnerd
 SiT-L/16 pixnerd-type-thing-subpatch-4
     SiT Parameters: 481,044,016 - ~3.2 it/s
 
+    800k 3.5 3.5 CFG:
+        Inception Score: 277.4464416503906
+        FID: 6.807401348272833
+        sFID: 13.205274238747052
+        Precision: 0.78158
+        Recall: 0.4036
+    800k 3.5 1.0 CFG:
+        

@@ -68,7 +68,6 @@ def main(args):
         z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
         encoder_depth=args.encoder_depth,
         in_channels=3,
-        experiment=args.experiment,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -191,7 +190,6 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--experiment", type=str, default="baseline", choices=["baseline", "final_layer_mlp", "multiple_final_layers"])
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)

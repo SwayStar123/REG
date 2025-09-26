@@ -1,14 +1,14 @@
 
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0200000"
-SAVE_PATH="exps/l16-baseline"
+STEP="0800000"
+SAVE_PATH="exps/l16-pixelnerd_type_thing"
 NUM_STEP=250
 MODEL_SIZE='L'
-CFG_SCALE=1.0
+CFG_SCALE=3.5
 CLS_CFG_SCALE=1.0
 GH=1.0
-EXPERIMENT='baseline'
+
 
 export NCCL_P2P_DISABLE=1
 
@@ -26,8 +26,7 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --cls-cfg-scale=${CLS_CFG_SCALE} \
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
-  --cls=768 \
-  --experiment=${EXPERIMENT}
+  --cls=768 
 
 
 python ./evaluations/evaluator.py \
