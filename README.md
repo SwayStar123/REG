@@ -126,7 +126,7 @@ Then this script will automatically create the folder in `exps` to save logs and
 
 ### 4. Generate images and evaluation
 You can generate images and get the final results through the following script. 
-The weight of REG can be find in this [link](https://pan.baidu.com/s/1QX2p3ybh1KfNU7wsp5McWw?pwd=khpp).
+The weight of REG can be find in this [link](https://pan.baidu.com/s/1QX2p3ybh1KfNU7wsp5McWw?pwd=khpp) or [HF](https://huggingface.co/Martinser/REG/tree/main).
 
 ```bash
 bash eval.sh
