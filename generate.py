@@ -42,6 +42,44 @@ def create_npz_from_sample_folder(sample_dir, num=50_000):
     return npz_path
 
 
+def count_existing_samples(sample_folder_dir):
+    """
+    Count existing .png files in the sample folder.
+    """
+    if not os.path.exists(sample_folder_dir):
+        return 0
+    
+    png_files = [f for f in os.listdir(sample_folder_dir) if f.endswith('.png')]
+    return len(png_files)
+
+
+def find_missing_indices(sample_folder_dir, num_fid_samples):
+    """
+    Find which image indices are missing from the sample folder.
+    Returns a set of missing indices.
+    """
+    if not os.path.exists(sample_folder_dir):
+        return set(range(num_fid_samples))
+    
+    existing_indices = set()
+    png_files = [f for f in os.listdir(sample_folder_dir) if f.endswith('.png')]
+    
+    for filename in png_files:
+        try:
+            # Extract index from filename like "046598.png"
+            index = int(filename.replace('.png', ''))
+            if 0 <= index < num_fid_samples:
+                existing_indices.add(index)
+        except ValueError:
+            # Skip files that don't follow the expected naming pattern
+            continue
+    
+    # Return missing indices
+    all_indices = set(range(num_fid_samples))
+    missing_indices = all_indices - existing_indices
+    return missing_indices
+
+
 def main(args):
     """
     Run sampling.
@@ -59,15 +97,65 @@ def main(args):
     torch.cuda.set_device(device)
     print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
 
+    # Create folder name first to check for existing samples
+    model_string_name = args.model.replace("/", "-")
+    ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
+    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-" \
+                  f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}"
+    sample_folder_dir = f"{args.sample_dir}/{folder_name}"
+    
+    # Check if we already have enough samples
+    existing_samples = count_existing_samples(sample_folder_dir)
+    missing_indices = find_missing_indices(sample_folder_dir, args.num_fid_samples)
+    
+    if rank == 0:
+        print(f"Found {existing_samples} existing samples in {sample_folder_dir}")
+        print(f"Missing {len(missing_indices)} samples")
+    
+    if len(missing_indices) == 0:
+        if rank == 0:
+            print(f"All {args.num_fid_samples} samples already exist. Skipping generation, creating npz...")
+            create_npz_from_sample_folder(sample_folder_dir, args.num_fid_samples)
+            print("Done.")
+        dist.barrier()
+        dist.destroy_process_group()
+        return
+    
+    # Convert missing indices to a sorted list for distributed generation
+    missing_indices_list = sorted(list(missing_indices))
+    samples_needed = len(missing_indices_list)
+    if rank == 0:
+        print(f"Need to generate {samples_needed} missing samples")
+
+    if args.space == "latent":
+        latent_size = args.resolution // 8
+        channels = 4
+        vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-mse").to(device)
+        vae.eval()
+
+        latents_scale = torch.tensor(
+            [0.18215, 0.18215, 0.18215, 0.18215, ]
+            ).view(1, 4, 1, 1).to(device)
+        latents_bias = -torch.tensor(
+            [0., 0., 0., 0.,]
+            ).view(1, 4, 1, 1).to(device)
+    else:
+        latent_size = args.resolution
+        channels = 3
+        vae = None
+    
+
     # Load model:
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
-        input_size=args.resolution,
+        input_size=latent_size,
         num_classes=args.num_classes,
         use_cfg = True,
         z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
         encoder_depth=args.encoder_depth,
-        in_channels=3,
+        in_channels=channels,
+        subpatch_size=args.subpatch_size,
+        uvit_skips=args.uvit_skips,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -95,11 +183,6 @@ def main(args):
     model.eval()  # important!
 
     # Create folder to save samples:
-    model_string_name = args.model.replace("/", "-")
-    ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
-    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-" \
-                  f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}"
-    sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
         print(f"Saving .png samples at {sample_folder_dir}")
@@ -109,7 +192,7 @@ def main(args):
     n = args.per_proc_batch_size
     global_batch_size = n * dist.get_world_size()
     # To make things evenly-divisible, we'll sample a bit more than we need and then discard the extra samples:
-    total_samples = int(math.ceil(args.num_fid_samples / global_batch_size) * global_batch_size)
+    total_samples = int(math.ceil(samples_needed / global_batch_size) * global_batch_size)
     if rank == 0:
         print(f"Total number of images that will be sampled: {total_samples}")
         print(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -120,12 +203,43 @@ def main(args):
     iterations = int(samples_needed_this_gpu // n)
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
-    total = 0
-    for _ in pbar:
-        # Sample inputs:
-        z = torch.randn(n, model.in_channels, args.resolution, args.resolution, device=device)
-        y = torch.randint(0, args.num_classes, (n,), device=device)
-        cls_z = torch.randn(n, args.cls, device=device)
+    
+    # Create a queue of missing indices for each GPU to process
+    indices_per_gpu = [[] for _ in range(dist.get_world_size())]
+    for i, idx in enumerate(missing_indices_list):
+        gpu_rank = i % dist.get_world_size()
+        indices_per_gpu[gpu_rank].append(idx)
+    
+    # Get the indices this GPU should process
+    my_indices = indices_per_gpu[rank]
+    
+    # Pad with dummy indices if needed to make batches even
+    while len(my_indices) % n != 0:
+        my_indices.append(-1)  # Use -1 as dummy index
+    
+    my_batches = [my_indices[i:i+n] for i in range(0, len(my_indices), n)]
+    total_batch_idx = 0
+
+    
+    for batch_indices in my_batches:
+        # Get the current batch of indices to generate
+        current_batch = [idx for idx in batch_indices if idx != -1]  # Filter out dummy indices
+        if not current_batch:  # Skip if all indices are dummy
+            continue
+            
+        # Set deterministic seed for each specific image index to ensure reproducibility
+        batch_size = len(current_batch)
+        z = torch.zeros(batch_size, channels, latent_size, latent_size, device=device)
+        y = torch.zeros(batch_size, dtype=torch.long, device=device)
+        cls_z = torch.zeros(batch_size, args.cls, device=device)
+        
+        # Generate deterministic samples for each index
+        for i, idx in enumerate(current_batch):
+            # Use the image index as part of the seed for deterministic generation
+            torch.manual_seed(args.global_seed + idx)
+            z[i] = torch.randn(channels, latent_size, latent_size, device=device)
+            y[i] = torch.randint(0, args.num_classes, (1,), device=device)
+            cls_z[i] = torch.randn(args.cls, device=device)
 
         # Sample images:
         sampling_kwargs = dict(
@@ -150,16 +264,19 @@ def main(args):
             else:
                 raise NotImplementedError()
 
+            if args.space == "latent":
+                samples = vae.decode((samples -  latents_bias) / latents_scale).sample
+
             samples = (samples + 1) / 2.
             samples = torch.clamp(
                 255. * samples, 0, 255
                 ).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
 
-            # Save samples to disk as individual .png files
+            # Save samples to disk using the specific indices
             for i, sample in enumerate(samples):
-                index = i * dist.get_world_size() + rank + total
-                Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
-        total += global_batch_size
+                if i < len(current_batch):  # Make sure we don't exceed the current batch
+                    index = current_batch[i]
+                    Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
@@ -190,6 +307,9 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--uvit-skips", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--subpatch-size", type=int, default=4)
+    parser.add_argument("--space", type=str, default="latent", choices=["pixel", "latent"])
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)

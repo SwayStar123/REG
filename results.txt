@@ -44,3 +44,21 @@ SiT-L/16 pixnerd-type-thing-subpatch-4
         Recall: 0.4036
     800k 3.5 1.0 CFG:
         
+SiT-XL/4 latentspace_subpatch_prediction_with_skip - subpatch 1
+    SiT Parameters: 738,027,780 - ~4.40 it/s:
+        CFG 1 @ 400k:
+            Inception Score: 137.84451293945312
+            FID: 8.300917448226414
+            sFID: 5.698391919460505
+            Precision: 0.68738
+            Recall: 0.641
+        CFG 2.2 CLS CFG 1.5 @ 400k:
+            Inception Score: 283.9247131347656
+            FID: 3.2811153915147315
+            sFID: 5.971343348992491
+            Precision: 0.80488
+            Recall: 0.5356
+
+
+SiT-XL/2 latentspace_subpatch_prediction_with_skip - subpatch 1
+    SiT Parameters: 738,027,780 - ~2.80 it/s 

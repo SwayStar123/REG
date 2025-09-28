@@ -157,7 +157,12 @@ def main(args):
     
     # Create model:
     assert args.resolution % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
-    latent_size = args.resolution // 8
+    if args.space == 'latent':
+        latent_size = args.resolution // 8
+        channels = 4
+    else:
+        latent_size = args.resolution
+        channels = 3
 
     if args.enc_type != None:
         encoders, encoder_types, architectures = load_encoders(
@@ -168,14 +173,17 @@ def main(args):
     z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
-        input_size=args.resolution,
-        in_channels=3,
+        input_size=latent_size,
+        in_channels=channels,
         num_classes=args.num_classes,
         use_cfg = (args.cfg_prob > 0),
         z_dims = z_dims,
         encoder_depth=args.encoder_depth,
+        subpatch_size=args.subpatch_size,
+        uvit_skips=args.uvit_skips,
         **block_kwargs
     )
+    patch_size = model.patch_size
 
     model = model.to(device)
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -215,7 +223,7 @@ def main(args):
     )    
     
     # Setup data:
-    train_dataset = CustomDataset(args.data_dir)
+    train_dataset = CustomDataset(args.data_dir, args.space)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
     train_dataloader = DataLoader(
         train_dataset,
@@ -271,16 +279,22 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     sample_batch_size = 64 // accelerator.num_processes
-    gt_raw_images, _ = next(iter(train_dataloader))
+    gt_raw_images, gt_latents,  _ = next(iter(train_dataloader))
     assert gt_raw_images.shape[-1] == args.resolution
-    gt_xs = (gt_raw_images.to(device) / 255.0) * 2.0 - 1.0
-    gt_xs = gt_xs.to(device)
+    if args.space == 'latent':
+        gt_xs = gt_latents[:sample_batch_size]
+        gt_xs = sample_posterior(gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias)
+    else:
+        gt_xs = (gt_raw_images.to(device) / 255.0) * 2.0 - 1.0
+        gt_xs = gt_xs.to(device)
     ys = torch.randint(1000, size=(sample_batch_size,), device=device)
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
-    xT = torch.randn((n, 3, args.resolution, args.resolution), device=device)
+    xT = torch.randn((n, channels, latent_size, latent_size), device=device)
     cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+
+    vae = None
 
     if accelerator.is_main_process:
         sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
@@ -288,9 +302,14 @@ def main(args):
         
     for epoch in range(args.epochs):
         model.train()
-        for raw_image, y in train_dataloader:
+        for raw_image, latents, y in train_dataloader:
             raw_image = raw_image.to(device)
-            x = (raw_image / 255.0) * 2.0 - 1.0
+            if args.space == 'latent':
+                x = latents.squeeze(1).to(device, non_blocking=True)
+                with torch.no_grad():
+                    x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
+            else:
+                x = (raw_image / 255.0) * 2.0 - 1.0
             y = y.to(device)
             z = None
             if args.legacy:
@@ -309,6 +328,15 @@ def main(args):
                         z = encoder.forward_features(raw_image_)
                         if 'dinov2' in encoder_type:
                             dense_z = z['x_norm_patchtokens']
+
+                            B, N, C = dense_z.shape
+                            hw = int(N**0.5)
+                            t_hw = latent_size // patch_size
+                            if hw != t_hw:
+                                patch_grid = dense_z.view(B, hw, hw, C).permute(0, 3, 1, 2)
+                                interpolated_patches = torch.nn.functional.interpolate(patch_grid, size=(t_hw, t_hw), mode='bilinear', align_corners=False)
+                                dense_z = interpolated_patches.permute(0, 2, 3, 1).reshape(B, t_hw * t_hw, C)
+
                             cls_token = z['x_norm_clstoken']
                             dense_z = torch.cat([cls_token.unsqueeze(1), dense_z], dim=1)
                         else:
@@ -357,6 +385,13 @@ def main(args):
             if (global_step == 1 or (global_step % args.sampling_steps == 0 and global_step > 0)):
                 with torch.no_grad():
                     ema.eval()
+                    if args.space == 'latent' and vae is None:
+                        try:
+                            vae_local = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-mse").to(device)
+                        except Exception as e:
+                            logging.warning(f"Failed to load VAE: {e}; skipping sampling this step.")
+                            vae_local = None
+                        vae = vae_local
                     sampling_kwargs = dict(
                         model=ema,
                         latents=xT.clone(),
@@ -371,6 +406,9 @@ def main(args):
                         args=args,
                     )
                     samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+
+                    if args.space == 'latent':
+                        samples = vae.decode((samples - latents_bias) / latents_scale).sample
 
                     # decode to pixels
                     samples = (samples + 1) / 2.
@@ -429,11 +467,15 @@ def parse_args(input_args=None):
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
+    parser.add_argument("--uvit-skips", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--subpatch-size", type=int, default=2)
+
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
+    parser.add_argument("--space", type=str, default="latent", choices=["pixel", "latent"])
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")

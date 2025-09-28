@@ -14,11 +14,13 @@ except ImportError:
 
 
 class CustomDataset(Dataset):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, space='latent'):
         PIL.Image.init()
         supported_ext = PIL.Image.EXTENSION.keys() | {'.npy'}
 
         self.images_dir = os.path.join(data_dir, 'images')
+        if space == "latent":
+            self.features_dir = os.path.join(data_dir, 'vae-sd')
 
         # images
         self._image_fnames = {
@@ -27,6 +29,16 @@ class CustomDataset(Dataset):
             }
         self.image_fnames = sorted(
             fname for fname in self._image_fnames if self._file_ext(fname) in supported_ext
+            )
+
+        if space == "latent":
+            # VAE latents (.npy)
+            self._feature_fnames = {
+                os.path.relpath(os.path.join(root, fname), start=self.features_dir)
+                for root, _dirs, files in os.walk(self.features_dir) for fname in files
+            }
+            self.feature_fnames = sorted(
+                fname for fname in self._feature_fnames if self._file_ext(fname) == '.npy'
             )
 
         # labels
@@ -42,6 +54,11 @@ class CustomDataset(Dataset):
         labels = [labels[fname.replace('\\', '/')] for fname in self.image_fnames]
         labels = np.array(labels)
         self.labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
+
+        if space == "latent":
+            assert len(self.image_fnames) == len(self.feature_fnames), "VAE/Images count mismatch"
+        
+        self.space = space
 
 
     def _file_ext(self, fname):
@@ -64,4 +81,11 @@ class CustomDataset(Dataset):
                 image = np.array(PIL.Image.open(f))
                 image = image.reshape(*image.shape[:2], -1).transpose(2, 0, 1)
 
-        return torch.from_numpy(image), torch.tensor(self.labels[idx])
+        if self.space == "latent":
+            feature_fname = self.feature_fnames[idx]
+            features = np.load(os.path.join(self.features_dir, feature_fname))
+            features = torch.from_numpy(features)
+        else:
+            features = None
+
+        return torch.from_numpy(image), features, torch.tensor(self.labels[idx])

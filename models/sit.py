@@ -260,6 +260,8 @@ class SiT(nn.Module):
         z_dims=[768],
         projector_dim=2048,
         cls_token_dim=768,
+        uvit_skips=True,
+        subpatch_size=4,
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -272,12 +274,14 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.uvit_skips = uvit_skips
+        self.subpatch_size = subpatch_size
 
         # Input embedders
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
-        self.subpatch_embedder = NerfEmbedder(16*in_channels, 1024, max_freqs=8)
+        self.subpatch_embedder = NerfEmbedder((subpatch_size**2)*in_channels, hidden_size, max_freqs=8)
         self.t_embedder = TimestepEmbedder(hidden_size) # timestep embedding type
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
@@ -290,6 +294,15 @@ class SiT(nn.Module):
         self.blocks = nn.ModuleList([
             SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
         ])
+        
+        # Skip connection linear layers for second half of blocks
+        # Each layer projects concatenated (skip + activation) back to hidden_size
+        if uvit_skips:
+            half_depth = depth // 2
+            self.skip_linears = nn.ModuleList([
+                nn.Linear(2 * hidden_size, hidden_size, bias=True) for _ in range(half_depth)
+            ])
+        
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
             ])
@@ -299,14 +312,14 @@ class SiT(nn.Module):
 
         self.pixel_calculators = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_size+1024, 1024),
+                nn.Linear(hidden_size+hidden_size, hidden_size),
                 nn.GELU(),
-                nn.Linear(1024,1024)
+                nn.Linear(hidden_size, hidden_size)
             ) for _ in range(4)
         ])
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
-        self.nerf_final_layer = NerfFinalLayer(1024, 16*self.out_channels)
+        self.nerf_final_layer = NerfFinalLayer(hidden_size, (subpatch_size**2)*self.out_channels)
 
         self.initialize_weights()
 
@@ -342,6 +355,12 @@ class SiT(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
+        # Initialize skip connection linear layers:
+        if self.uvit_skips:
+            for skip_linear in self.skip_linears:
+                nn.init.xavier_uniform_(skip_linear.weight)
+                nn.init.constant_(skip_linear.bias, 0)
+
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
@@ -374,12 +393,14 @@ class SiT(nn.Module):
         """
         #cat with cls_token
         N, C, H, W = x.shape
+        P = self.patch_size
+        SP = self.subpatch_size
 
-        patches = x.view(N, C, H//self.patch_size, self.patch_size, W//self.patch_size, self.patch_size)
+        patches = x.view(N, C, H//P, P, W//P, P)
         # N, C, H/P, P, W/P, P -> N*H/P*W/P, P,P, C
-        patches = patches.permute(0, 2, 4, 3, 5, 1).reshape(-1, self.patch_size, self.patch_size, C)
-        # (BS * SEQ, P,P, C) -> (BS * SEQ, P/4, 4, P/4, 4, C) -> (.., P/4, P/4, 16*C)
-        patches = patches.view(-1, self.patch_size//4, 4, self.patch_size//4, 4, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, (self.patch_size//4)**2, 16*C)
+        patches = patches.permute(0, 2, 4, 3, 5, 1).reshape(-1, P, P, C)
+        # (BS * SEQ, P,P, C) -> (BS * SEQ, P/SP, SP, P/SP, SP, C) -> (.., P/SP, P/SP, SP*SP*C)
+        patches = patches.view(-1, P//SP, SP, P//SP, SP, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, (P//SP)**2, (SP**2)*C)
         subpatch_embeddings = self.subpatch_embedder(patches)  # (N, H*W, D')
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
         if cls_token is not None:
@@ -397,24 +418,46 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
-        for i, block in enumerate(self.blocks[:-4]):
+        # Split blocks into two halves for skip connections
+        half_depth = len(self.blocks) // 2
+        skip_activations = []
+        
+        # First half: save activations for skip connections (excluding last 4 blocks)
+        for i, block in enumerate(self.blocks[:half_depth]):
             x = block(x, c)
+            if self.uvit_skips:
+                skip_activations.append(x)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
-
-        for (block, pixel_calculator) in zip(self.blocks[-4:], self.pixel_calculators):
+        
+        # Second half: use skip connections in reverse order
+        for i, block in enumerate(self.blocks[half_depth:]):
+            if self.uvit_skips:
+                # Get corresponding skip activation (in reverse order)
+                skip_idx = half_depth - 1 - i
+                if skip_idx >= 0 and skip_idx < len(skip_activations):
+                    skip_activation = skip_activations[skip_idx]
+                    # Concatenate skip connection with current activation
+                    x_with_skip = torch.cat([x, skip_activation], dim=-1)
+                    # Project back to hidden_size
+                    x = self.skip_linears[i](x_with_skip)
+                
             x = block(x, c)
-            latent = x[:, 1:] # (N, T-1, D)
-            # (N, T, D) -> (N, T, P*P, D)  Repeat the latent p*p times to match pixel embeddings
-            latent = latent.unsqueeze(2).repeat(1, 1, (self.patch_size//4)**2, 1).reshape(-1, (self.patch_size//4)**2, D)
-            subpatch_embeddings = pixel_calculator(torch.cat([latent, subpatch_embeddings], dim=-1))
+            
+            # Handle pixel calculations for the last 4 blocks
+            if i >= len(self.blocks[half_depth:]) - 4:
+                pixel_calc_idx = i - (len(self.blocks[half_depth:]) - 4)
+                latent = x[:, 1:] # (N, T-1, D)
+                # (N, T, D) -> (N, T, P*P, D)  Repeat the latent p*p times to match pixel embeddings
+                latent = latent.unsqueeze(2).repeat(1, 1, (P//SP)**2, 1).reshape(-1, (P//SP)**2, D)
+                subpatch_embeddings = self.pixel_calculators[pixel_calc_idx](torch.cat([latent, subpatch_embeddings], dim=-1))
         
         _, cls_token = self.final_layer(x, c, cls=cls_token)
-        x = self.nerf_final_layer(subpatch_embeddings)  # (N*H/P*W/P, P//4*P//4, 16*C)
-        # (N*H/P*W/P, P//4*P//4, 16*C) -> (N*H/P*W/P, P*P, C)
-        x = x.view(-1, (self.patch_size//4), (self.patch_size//4), 4, 4, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, self.patch_size**2, C)
+        x = self.nerf_final_layer(subpatch_embeddings)  # (N*H/P*W/P, P//SP*P//4, SP*SP*C)
+        # (N*H/P*W/P, P//SP*P//SP, SP*SP*C) -> (N*H/P*W/P, P*P, C)
+        x = x.view(-1, (P//SP), (P//SP), SP, SP, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, P**2, C)
         x = x.transpose(1, 2).reshape(N, T-1, -1)
-        x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=self.patch_size, stride=self.patch_size)
+        x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=P, stride=P)
 
         return x, zs, cls_token
 
