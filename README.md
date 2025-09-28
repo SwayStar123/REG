@@ -84,7 +84,7 @@ pip install -r requirements.txt
 Currently, we provide experiments for ImageNet. You can place the data that you want and can specifiy it via `--data-dir` arguments in training scripts.
 
 #### Preprocessing data
-Please refer to preprocessing guide.
+Please refer to the preprocessing guide. And you can directly download our processed data, ImageNet data [link](https://huggingface.co/WindATree/ImageNet-256-VAE/tree/main), and ImageNet data after VAE encoder [link]( https://huggingface.co/WindATree/vae-sd/tree/main)
 
 ### 3. Training
 Run train.sh
