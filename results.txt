@@ -62,3 +62,15 @@ SiT-XL/4 latentspace_subpatch_prediction_with_skip - subpatch 1
 
 SiT-XL/2 latentspace_subpatch_prediction_with_skip - subpatch 1
     SiT Parameters: 738,027,780 - ~2.80 it/s 
+        CFG 1 @ 100k:
+            Inception Score: 121.58829498291016
+            FID: 9.70246474278565
+            sFID: 5.2068180055953235
+            Precision: 0.736
+            Recall: 0.5806
+        CFG 1 @ 200k:
+            Inception Score: 159.6708984375
+            FID: 5.1760432588394
+            sFID: 4.779600275239773
+            Precision: 0.7671
+            Recall: 0.606

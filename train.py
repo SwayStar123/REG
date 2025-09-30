@@ -254,6 +254,15 @@ def main(args):
         optimizer.load_state_dict(ckpt['opt'])
         global_step = ckpt['steps']
 
+        for group in optimizer.param_groups:
+            group['weight_decay'] = args.adam_weight_decay
+            group['eps'] = args.adam_epsilon
+        optimizer.defaults['weight_decay'] = args.adam_weight_decay
+        optimizer.defaults['eps'] = args.adam_epsilon
+
+        print("Weight decay:", optimizer.param_groups[0]['weight_decay'])
+        print("Adam epsilon:", optimizer.param_groups[0]['eps'])
+
     model, optimizer, train_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader
     )
@@ -458,7 +467,7 @@ def parse_args(input_args=None):
     parser.add_argument("--logging-dir", type=str, default="logs")
     parser.add_argument("--report-to", type=str, default="wandb")
     parser.add_argument("--sampling-steps", type=int, default=1000)
-    parser.add_argument("--resume-step", type=int, default=0)
+    parser.add_argument("--resume-step", type=int, default=200000)
 
     # model
     parser.add_argument("--model", type=str)
@@ -479,7 +488,7 @@ def parse_args(input_args=None):
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")
-    parser.add_argument("--mixed-precision", type=str, default="fp16", choices=["no", "fp16", "bf16"])
+    parser.add_argument("--mixed-precision", type=str, default="bf16", choices=["no", "fp16", "bf16"])
 
     # optimization
     parser.add_argument("--epochs", type=int, default=1400)
@@ -489,8 +498,8 @@ def parse_args(input_args=None):
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--adam-beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam-beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam-weight-decay", type=float, default=0., help="Weight decay to use.")
-    parser.add_argument("--adam-epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
+    parser.add_argument("--adam-weight-decay", type=float, default=0.05, help="Weight decay to use.")
+    parser.add_argument("--adam-epsilon", type=float, default=1e-06, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
 
     # seed

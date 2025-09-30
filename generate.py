@@ -201,27 +201,33 @@ def main(args):
     samples_needed_this_gpu = int(total_samples // dist.get_world_size())
     assert samples_needed_this_gpu % n == 0, "samples_needed_this_gpu must be divisible by the per-GPU batch size"
     iterations = int(samples_needed_this_gpu // n)
-    pbar = range(iterations)
-    pbar = tqdm(pbar) if rank == 0 else pbar
-    
-    # Create a queue of missing indices for each GPU to process
-    indices_per_gpu = [[] for _ in range(dist.get_world_size())]
-    for i, idx in enumerate(missing_indices_list):
-        gpu_rank = i % dist.get_world_size()
-        indices_per_gpu[gpu_rank].append(idx)
-    
-    # Get the indices this GPU should process
-    my_indices = indices_per_gpu[rank]
-    
-    # Pad with dummy indices if needed to make batches even
-    while len(my_indices) % n != 0:
-        my_indices.append(-1)  # Use -1 as dummy index
-    
-    my_batches = [my_indices[i:i+n] for i in range(0, len(my_indices), n)]
-    total_batch_idx = 0
 
+    # Ensure all GPUs generate the same number of batches by rounding up to total_samples
+    # This prevents NCCL timeouts due to uneven work distribution
+    samples_per_gpu = total_samples // dist.get_world_size()
     
-    for batch_indices in my_batches:
+    # Create indices for this GPU to process (some may be dummy indices beyond samples_needed)
+    start_idx = rank * samples_per_gpu
+    end_idx = start_idx + samples_per_gpu
+    
+    # Create list of indices this GPU will process
+    my_indices = []
+    for i in range(start_idx, end_idx):
+        if i < len(missing_indices_list):
+            my_indices.append(missing_indices_list[i])
+        else:
+            my_indices.append(-1)  # Dummy index for padding
+    
+    # Create batches from the indices
+    my_batches = [my_indices[i:i+n] for i in range(0, len(my_indices), n)]
+    
+    # Update pbar to reflect actual number of batches this GPU will process
+    if rank == 0:
+        pbar = tqdm(my_batches, desc="Generating samples")
+    else:
+        pbar = my_batches
+
+    for batch_indices in pbar:
         # Get the current batch of indices to generate
         current_batch = [idx for idx in batch_indices if idx != -1]  # Filter out dummy indices
         if not current_batch:  # Skip if all indices are dummy
