@@ -74,3 +74,9 @@ SiT-XL/2 latentspace_subpatch_prediction_with_skip - subpatch 1
             sFID: 4.779600275239773
             Precision: 0.7671
             Recall: 0.606
+        CFG 1 @ 400k:
+            Inception Score: 177.09890747070312
+            FID: 3.822234562675078
+            sFID: 4.630031418067006
+            Precision: 0.78818
+            Recall: 0.5911

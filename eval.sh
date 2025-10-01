@@ -1,12 +1,12 @@
 
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0200000"
+STEP="0400000"
 SAVE_PATH="exps/xl2-latentspace_subpatch_prediction_with_skip"
 NUM_STEP=250
 MODEL_SIZE='XL'
-CFG_SCALE=1.0
-CLS_CFG_SCALE=1.0
+CFG_SCALE=2.2
+CLS_CFG_SCALE=2.2
 GH=1.0
 PATCH_SIZE=2
 
