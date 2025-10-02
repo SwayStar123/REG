@@ -111,7 +111,7 @@ def main(args):
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
-        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=False)]
     )
 
     if accelerator.is_main_process:
