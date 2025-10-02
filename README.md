@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">Representation Entanglement for Generation: Training Diffusion Transformers Is Much Easier Than You Think
+  <h1 align="center">Representation Entanglement for Generation: Training Diffusion Transformers Is Much Easier Than You Think (NeurIPS 2025 Oral)
 </h1>
   <p align="center">
       <a href='https://github.com/Martinser' style='text-decoration: none' >Ge Wu</a><sup>1</sup>&emsp;
@@ -21,6 +21,7 @@
       <div align="center">
        <a href='https://arxiv.org/abs/2507.01467'><img src='https://img.shields.io/badge/arXiv-2507.01467-brown.svg?logo=arxiv&logoColor=white'></a>
 	<a href='https://huggingface.co/Martinser/REG/tree/main'><img src='https://img.shields.io/badge/🤗-Model-blue.svg'></a>
+		  <a href='https://zhuanlan.zhihu.com/p/1952346823168595518'><img src='https://img.shields.io/badge/Zhihu-chinese_article-blue.svg?logo=zhihu&logoColor=white'></a>
 	  </div>
     <p align='center'>
     </p>
@@ -83,7 +84,7 @@ pip install -r requirements.txt
 Currently, we provide experiments for ImageNet. You can place the data that you want and can specifiy it via `--data-dir` arguments in training scripts.
 
 #### Preprocessing data
-Please refer to preprocessing guide.
+Please refer to the preprocessing guide. And you can directly download our processed data, ImageNet data [link](https://huggingface.co/WindATree/ImageNet-256-VAE/tree/main), and ImageNet data after VAE encoder [link]( https://huggingface.co/WindATree/vae-sd/tree/main)
 
 ### 3. Training
 Run train.sh
@@ -125,7 +126,7 @@ Then this script will automatically create the folder in `exps` to save logs and
 
 ### 4. Generate images and evaluation
 You can generate images and get the final results through the following script. 
-The weight of REG can be find in this [link](https://pan.baidu.com/s/1QX2p3ybh1KfNU7wsp5McWw?pwd=khpp).
+The weight of REG can be found in this [link](https://pan.baidu.com/s/1QX2p3ybh1KfNU7wsp5McWw?pwd=khpp) or [HF](https://huggingface.co/Martinser/REG/tree/main).
 
 ```bash
 bash eval.sh
