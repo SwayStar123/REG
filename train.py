@@ -135,7 +135,7 @@ def main(args):
     
     # Create model:
     assert args.resolution % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
-    latent_size = args.resolution // 8
+    latent_size = args.resolution // (16 if "INVAE" in args.vae_name else 8)
 
     if args.enc_type != None:
         encoders, encoder_types, architectures = load_encoders(
@@ -259,7 +259,7 @@ def main(args):
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
-    xT = torch.randn((n, 4, latent_size, latent_size), device=device)
+    xT = torch.randn((n, channels, latent_size, latent_size), device=device)
     cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
     
     if accelerator.is_main_process:
