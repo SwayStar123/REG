@@ -375,40 +375,40 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def SiT_XL_2(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_XL_4(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_XL_8(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=8, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_L_2(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_L_4(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_L_8(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=8, num_heads=16, encoder_depth=8, **kwargs)
 
 def SiT_B_2(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, encoder_depth=4, **kwargs)
 
 def SiT_B_4(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, encoder_depth=4, **kwargs)
 
 def SiT_B_8(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=8, num_heads=12, encoder_depth=4, **kwargs)
 
 def SiT_S_2(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, encoder_depth=4, **kwargs)
 
 def SiT_S_4(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, encoder_depth=4, **kwargs)
 
 def SiT_S_8(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, encoder_depth=4, **kwargs)
 
 
 SiT_models = {
