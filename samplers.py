@@ -95,7 +95,7 @@ def euler_maruyama_sampler(
             cls_deps = cls_eps_i * torch.sqrt(torch.abs(dt))
 
             # compute drift
-            v_cur, _, cls_v_cur = model(
+            v_cur, _, cls_v_cur, _ = model(
                 model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
                 )
             v_cur = v_cur.to(torch.float64)
@@ -139,7 +139,7 @@ def euler_maruyama_sampler(
         ) * t_cur
     
     # compute drift
-    v_cur, _, cls_v_cur = model(
+    v_cur, _, cls_v_cur, _ = model(
         model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
         )
     v_cur = v_cur.to(torch.float64)

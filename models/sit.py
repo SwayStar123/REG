@@ -12,6 +12,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from models.memory import ConceptBank, compute_concept_losses
 
 
 def build_mlp(hidden_size, projector_dim, z_dim):
@@ -262,6 +263,8 @@ class SiT(nn.Module):
         cls_token_dim=768,
         uvit_skips=True,
         subpatch_size=4,
+        num_registers=256,
+        n_concepts=4096,
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -320,6 +323,12 @@ class SiT(nn.Module):
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, self.cls_token_dim)
         self.nerf_final_layer = NerfFinalLayer(hidden_size, (subpatch_size**2)*self.out_channels)
+
+        self.registers = nn.Parameter(torch.randn(num_registers, hidden_size))
+        self.concept_banks = nn.ModuleList([
+            ConceptBank(n_concepts, hidden_size, key_dim=256, n_registers=num_registers, topk_per_register=1) for _ in range(depth-1)
+        ])
+        self.n_concepts = n_concepts
 
         self.initialize_weights()
 
@@ -403,6 +412,8 @@ class SiT(nn.Module):
         patches = patches.view(-1, P//SP, SP, P//SP, SP, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, (P//SP)**2, (SP**2)*C)
         subpatch_embeddings = self.subpatch_embedder(patches)  # (N, H*W, D')
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
+
+        N, x_T, D = x.shape
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
             cls_token = self.wg_norm(cls_token)
@@ -411,24 +422,44 @@ class SiT(nn.Module):
             x = x + self.pos_embed
         else:
             exit()
-        N, T, D = x.shape
 
         # timestep and class embedding
         t_embed = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
+        
+        x = torch.cat((x, t_embed.unsqueeze(1), y.unsqueeze(1), self.registers.unsqueeze(0).repeat(N, 1, 1)), dim=1)  # (N, T+2+R, D)
 
         # Split blocks into two halves for skip connections
         half_depth = len(self.blocks) // 2
         skip_activations = []
+
+        aux_losses = 0
         
         # First half: save activations for skip connections (excluding last 4 blocks)
         for i, block in enumerate(self.blocks[:half_depth]):
             x = block(x, c)
+
+            registers = x[:, -self.registers.shape[0]:]  # (N, R, D)
+            concepts, info = self.concept_banks[i](registers)
+            
+            # Compute auxiliary losses
+            aux_loss, metrics = compute_concept_losses(
+                info, 
+                n_concepts=self.n_concepts
+            )
+
+            aux_losses += aux_loss
+
+            # Replace registers with concepts
+            x = torch.cat((x[:, :-self.registers.shape[0]], concepts), dim=1)
+
             if self.uvit_skips:
                 skip_activations.append(x)
             if (i + 1) == self.encoder_depth:
-                zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+                projector_in = x[:, :x_T+1]
+                zs = [projector(projector_in.reshape(-1, D)).reshape(N, x_T+1, -1) for projector in self.projectors]
+
         
         # Second half: use skip connections in reverse order
         for i, block in enumerate(self.blocks[half_depth:]):
@@ -443,11 +474,22 @@ class SiT(nn.Module):
                     x = self.skip_linears[i](x_with_skip)
                 
             x = block(x, c)
-            
+            if i != half_depth -1:
+                registers = x[:, -self.registers.shape[0]:]  # (N, R, D)
+                concepts, info = self.concept_banks[i+half_depth](registers)
+                
+                # Compute auxiliary losses
+                aux_loss, metrics = compute_concept_losses(
+                    info, 
+                    n_concepts=self.n_concepts
+                )
+
+                aux_losses += aux_loss
+                
             # Handle pixel calculations for the last 4 blocks
             if i >= len(self.blocks[half_depth:]) - 4:
                 pixel_calc_idx = i - (len(self.blocks[half_depth:]) - 4)
-                latent = x[:, 1:] # (N, T-1, D)
+                latent = x[:, 1:x_T+1]  # (N, T, D)
                 # (N, T, D) -> (N, T, P*P, D)  Repeat the latent p*p times to match pixel embeddings
                 latent = latent.unsqueeze(2).repeat(1, 1, (P//SP)**2, 1).reshape(-1, (P//SP)**2, D)
                 subpatch_embeddings = self.pixel_calculators[pixel_calc_idx](torch.cat([latent, subpatch_embeddings], dim=-1))
@@ -456,10 +498,10 @@ class SiT(nn.Module):
         x = self.nerf_final_layer(subpatch_embeddings)  # (N*H/P*W/P, P//SP*P//4, SP*SP*C)
         # (N*H/P*W/P, P//SP*P//SP, SP*SP*C) -> (N*H/P*W/P, P*P, C)
         x = x.view(-1, (P//SP), (P//SP), SP, SP, C).permute(0, 1, 3, 2, 4, 5).reshape(-1, P**2, C)
-        x = x.transpose(1, 2).reshape(N, T-1, -1)
+        x = x.transpose(1, 2).reshape(N, x_T, -1)
         x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=P, stride=P)
 
-        return x, zs, cls_token
+        return x, zs, cls_token, aux_losses
 
 
 #################################################################################
