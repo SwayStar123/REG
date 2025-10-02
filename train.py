@@ -165,8 +165,8 @@ def main(args):
     else:
         scaling_factor = 0.18215
     
-    latents_scale = torch.tensor([scaling_factor, scaling_factor, scaling_factor, scaling_factor]).view(1, 4, 1, 1).to(device)
-    latents_bias = torch.zeros(channels).view(1, 4, 1, 1).to(device)
+    latents_scale = torch.tensor([scaling_factor, scaling_factor, scaling_factor, scaling_factor]).view(1, channels, 1, 1).to(device)
+    latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
     # create loss function
     loss_fn = SILoss(
