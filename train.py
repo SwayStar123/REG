@@ -30,34 +30,16 @@ import math
 from torchvision.utils import make_grid
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision.transforms import Normalize
+from samplers import euler_maruyama_sampler
+from PIL import Image
 
 logger = get_logger(__name__)
 
-CLIP_DEFAULT_MEAN = (0.48145466, 0.4578275, 0.40821073)
-CLIP_DEFAULT_STD = (0.26862954, 0.26130258, 0.27577711)
-
-
-
 def preprocess_raw_image(x, enc_type):
     resolution = x.shape[-1]
-    if 'clip' in enc_type:
-        x = x / 255.
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
-        x = Normalize(CLIP_DEFAULT_MEAN, CLIP_DEFAULT_STD)(x)
-    elif 'mocov3' in enc_type or 'mae' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-    elif 'dinov2' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
-    elif 'dinov1' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-    elif 'jepa' in enc_type:
-        x = x / 255.
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
-        x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
+    x = x / 255.
+    x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
+    x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
 
     return x
 
@@ -77,7 +59,6 @@ def sample_posterior(moments, latents_scale=1., latents_bias=0.):
     z = mean + std * torch.randn_like(mean)
     z = (z * latents_scale + latents_bias) 
     return z 
-
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -113,7 +94,6 @@ def requires_grad(model, flag=True):
     """
     for p in model.parameters():
         p.requires_grad = flag
-
 
 #################################################################################
 #                                  Training Loop                                #
@@ -177,13 +157,16 @@ def main(args):
     model = model.to(device)
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
+    vae = AutoencoderKL.from_pretrained(args.vae_name).to(device)
+    channels = vae.latent_channels
     
-    latents_scale = torch.tensor(
-        [0.18215, 0.18215, 0.18215, 0.18215]
-        ).view(1, 4, 1, 1).to(device)
-    latents_bias = torch.tensor(
-        [0., 0., 0., 0.]
-        ).view(1, 4, 1, 1).to(device)
+    if "INVAE" in args.vae_name:
+        scaling_factor = 0.3099
+    else:
+        scaling_factor = 0.18215
+    
+    latents_scale = torch.tensor([scaling_factor, scaling_factor, scaling_factor, scaling_factor]).view(1, 4, 1, 1).to(device)
+    latents_bias = torch.zeros(channels).view(1, 4, 1, 1).to(device)
 
     # create loss function
     loss_fn = SILoss(
@@ -191,8 +174,6 @@ def main(args):
         path_type=args.path_type, 
         encoders=encoders,
         accelerator=accelerator,
-        latents_scale=latents_scale,
-        latents_bias=latents_bias,
         weighting=args.weighting
     )
     if accelerator.is_main_process:
@@ -279,7 +260,12 @@ def main(args):
     # Create sampling noise:
     n = ys.size(0)
     xT = torch.randn((n, 4, latent_size, latent_size), device=device)
-        
+    cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+    
+    if accelerator.is_main_process:
+        sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
+        os.makedirs(sample_dir, exist_ok=True)
+    
     for epoch in range(args.epochs):
         model.train()
         for raw_image, x, y in train_dataloader:
@@ -350,7 +336,34 @@ def main(args):
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
             if (global_step == 1 or (global_step % args.sampling_steps == 0 and global_step > 0)):
-                logging.info("Generating EMA samples done.")
+                sampling_kwargs = dict(
+                        model=ema,
+                        latents=xT.clone(),
+                        y=ys.clone(),
+                        num_steps=250,
+                        heun=False,
+                        cfg_scale=4.,
+                        guidance_low=0.,
+                        guidance_high=1.,
+                        path_type=args.path_type,
+                        cls_latents=cls_z.clone(),
+                        args=args,
+                    )
+                samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+
+                samples = vae.decode((samples - latents_bias) / latents_scale).sample
+
+                # decode to pixels
+                samples = (samples + 1) / 2.
+                samples = samples.clamp(0, 1).contiguous()
+                accelerator.wait_for_everyone()
+                gathered = accelerator.gather(samples).contiguous()
+                if accelerator.is_main_process:
+                    grid = array2grid(gathered)
+                    Image.fromarray(grid).save(f"{sample_dir}/samples_step_{global_step}.png")
+                    logger.info(f"Saved samples at step {global_step}")
+                    if global_step % 50000 == 0:
+                        accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
 
             logs = {
                 "loss_final": accelerator.gather(loss).mean().detach().item(),
@@ -387,7 +400,7 @@ def parse_args(input_args=None):
     parser.add_argument("--exp-name", type=str, required=True)
     parser.add_argument("--logging-dir", type=str, default="logs")
     parser.add_argument("--report-to", type=str, default="wandb")
-    parser.add_argument("--sampling-steps", type=int, default=10000)
+    parser.add_argument("--sampling-steps", type=int, default=2000)
     parser.add_argument("--resume-step", type=int, default=0)
 
     # model
@@ -402,6 +415,7 @@ def parse_args(input_args=None):
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
+    parser.add_argument("--vae-name", type=str, default="stabilityai/sd-vae-ft-mse")
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")
@@ -434,6 +448,7 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:

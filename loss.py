@@ -22,16 +22,12 @@ class SILoss:
             weighting="uniform",
             encoders=[], 
             accelerator=None, 
-            latents_scale=None, 
-            latents_bias=None,
             ):
         self.prediction = prediction
         self.weighting = weighting
         self.path_type = path_type
         self.encoders = encoders
         self.accelerator = accelerator
-        self.latents_scale = latents_scale
-        self.latents_bias = latents_bias
 
     def interpolant(self, t):
         if self.path_type == "linear":
