@@ -23,7 +23,7 @@ from loss import SILoss
 from utils import load_encoders
 
 from dataset import CustomDataset
-from diffusers.models import AutoencoderKL
+from preprocessing.encoders import load_invae
 # import wandb_utils
 import wandb
 import math
@@ -52,12 +52,9 @@ def array2grid(x):
 
 
 @torch.no_grad()
-def sample_posterior(moments, latents_scale=1., latents_bias=0.):
-    device = moments.device
-    
-    mean, std = torch.chunk(moments, 2, dim=1)
-    z = mean + std * torch.randn_like(mean)
-    z = (z * latents_scale + latents_bias) 
+def sample_posterior(latents, latents_scale=1., latents_bias=0.):
+    # With invae, we directly get sampled latents, no need to chunk into mean/std
+    z = (latents * latents_scale + latents_bias) 
     return z 
 
 @torch.no_grad()
@@ -134,8 +131,8 @@ def main(args):
         set_seed(args.seed + accelerator.process_index)
     
     # Create model:
-    assert args.resolution % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
-    latent_size = args.resolution // (16 if "INVAE" in args.vae_name else 8)
+    assert args.resolution % 16 == 0, "Image size must be divisible by 16 (for the invae encoder)."
+    latent_size = args.resolution // 16  # invae uses 16x downsampling
 
     if args.enc_type != None:
         encoders, encoder_types, architectures = load_encoders(
@@ -157,15 +154,15 @@ def main(args):
     model = model.to(device)
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
-    vae = AutoencoderKL.from_pretrained(args.vae_name).to(device)
-    channels = vae.latent_channels
     
-    if "INVAE" in args.vae_name:
-        scaling_factor = 0.3099
-    else:
-        scaling_factor = 0.18215
+    # Load custom invae model
+    vae = load_invae(args.vae_name, device=device)
+    vae.eval().requires_grad_(False)
+    channels = 32  # invae uses 32 channels
     
-    latents_scale = torch.tensor([scaling_factor, scaling_factor, scaling_factor, scaling_factor]).view(1, channels, 1, 1).to(device)
+    # invae uses 0.3099 scaling factor
+    scaling_factor = 0.3099
+    latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
     # create loss function
@@ -415,7 +412,7 @@ def parse_args(input_args=None):
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
-    parser.add_argument("--vae-name", type=str, default="stabilityai/sd-vae-ft-mse")
+    parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae")
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")

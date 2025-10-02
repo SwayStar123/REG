@@ -14,7 +14,7 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 import torch
 import torch.distributed as dist
 from models.sit import SiT_models
-from diffusers.models import AutoencoderKL
+from preprocessing.encoders import load_invae
 from tqdm import tqdm
 import os
 from PIL import Image
@@ -61,7 +61,7 @@ def main(args):
 
     # Load model:
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
-    latent_size = args.resolution // 8
+    latent_size = args.resolution // 16  # invae uses 16x downsampling
     model = SiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes,
@@ -93,8 +93,9 @@ def main(args):
 
 
     model.eval()  # important!
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
-    #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path="your_local_path/weight/").to(device)
+    # Load invae model using load_invae function
+    vae = load_invae("REPA-E/e2e-invae", device=device)
+    vae.eval().requires_grad_(False)
 
 
     # Create folder to save samples:
@@ -153,13 +154,9 @@ def main(args):
             else:
                 raise NotImplementedError()
 
-            latents_scale = torch.tensor(
-                [0.18215, 0.18215, 0.18215, 0.18215, ]
-                ).view(1, 4, 1, 1).to(device)
-            latents_bias = -torch.tensor(
-                [0., 0., 0., 0.,]
-                ).view(1, 4, 1, 1).to(device)
-            samples = vae.decode((samples -  latents_bias) / latents_scale).sample
+            # For invae, apply 0.3099 scaling factor
+            scaling_factor = 0.3099
+            samples = vae.decode(samples / scaling_factor).sample
             samples = (samples + 1) / 2.
             samples = torch.clamp(
                 255. * samples, 0, 255
@@ -200,8 +197,6 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
-    # vae
-    parser.add_argument("--vae",  type=str, choices=["ema", "mse"], default="ema")
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)

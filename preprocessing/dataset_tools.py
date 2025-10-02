@@ -23,7 +23,7 @@ import PIL.Image
 import torch
 from tqdm import tqdm
 
-from encoders import StabilityVAEEncoder
+from encoders import InvaeEncoder
 
 #----------------------------------------------------------------------------
 
@@ -262,17 +262,15 @@ def encode_image_worker(args):
     gpu_id, batch_data, model_url = args
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
-    vae = StabilityVAEEncoder(vae_name=model_url, batch_size=1)
+    # Use InvaeEncoder which returns sampled latents directly
+    vae = InvaeEncoder(vae_name=model_url, batch_size=1)
     results = []
     
     for idx, image_data in batch_data:
-        try:
-            img_tensor = torch.tensor(image_data.img).to('cuda').permute(2, 0, 1).unsqueeze(0)
-            mean_std = vae.encode_pixels(img_tensor)[0].cpu().numpy()
-            results.append((idx, mean_std, image_data.label))
-        except Exception as e:
-            print(f"Error encoding image {idx} on GPU {gpu_id}: {e}")
-            results.append(None)
+        img_tensor = torch.tensor(image_data.img).to('cuda').permute(2, 0, 1).unsqueeze(0)
+        latents = vae.encode(img_tensor).cpu().numpy()
+        results.append((idx, latents, image_data.label))
+
     
     return results
 
@@ -443,7 +441,7 @@ def convert(
 #----------------------------------------------------------------------------
 
 @cmdline.command()
-@click.option('--model-url',  help='VAE encoder model', metavar='URL',                  type=str, default='stabilityai/sd-vae-ft-mse', show_default=True)
+@click.option('--model-url',  help='VAE encoder model', metavar='URL',                  type=str, default='REPA-E/e2e-invae', show_default=True)
 @click.option('--source',     help='Input directory or archive name', metavar='PATH',   type=str, required=True)
 @click.option('--dest',       help='Output directory or archive name', metavar='PATH',  type=str, required=True)
 @click.option('--max-images', help='Maximum number of images to output', metavar='INT', type=int)
@@ -514,12 +512,12 @@ def encode(
                     current_results.sort(key=lambda x: x[0])
                     
                     # Save results from this batch
-                    for result_idx, mean_std, label in current_results:
+                    for result_idx, latents, label in current_results:
                         idx_str = f'{result_idx:08d}'
-                        archive_fname = f'{idx_str[:5]}/img-mean-std-{idx_str}.npy'
+                        archive_fname = f'{idx_str[:5]}/img-latents-{idx_str}.npy'
 
                         f = io.BytesIO()
-                        np.save(f, mean_std)
+                        np.save(f, latents)
                         save_bytes(os.path.join(archive_root_dir, archive_fname), f.getvalue())
                         labels.append([archive_fname, label] if label is not None else None)
                 

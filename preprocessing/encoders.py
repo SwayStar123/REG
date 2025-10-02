@@ -11,8 +11,11 @@ import os
 import warnings
 import numpy as np
 import torch
-from torch_utils import persistence
-from torch_utils import misc
+try:
+    from torch_utils import persistence
+except ImportError:
+    from .torch_utils import persistence
+
 
 warnings.filterwarnings('ignore', 'torch.utils._pytree._register_pytree_node is deprecated.')
 warnings.filterwarnings('ignore', '`resume_download` is deprecated')
@@ -46,13 +49,13 @@ class Encoder:
     def encode_pixels(self, x): # raw pixels => raw latents
         raise NotImplementedError # to be overridden by subclass
 #----------------------------------------------------------------------------
-# Pre-trained VAE encoder from Stability AI.
+# Pre-trained InVAE encoder.
 
 @persistence.persistent_class
-class StabilityVAEEncoder(Encoder):
+class InvaeEncoder(Encoder):
     def __init__(self,
-        vae_name    = 'stabilityai/sd-vae-ft-mse',  # Name of the VAE to use.
-        batch_size  = 8,                            # Batch size to use when running the VAE.
+        vae_name    = 'REPA-E/e2e-invae',  # Name of the VAE to use.
+        batch_size  = 8,                    # Batch size to use when running the VAE.
     ):
         super().__init__()
         self.vae_name = vae_name
@@ -62,7 +65,7 @@ class StabilityVAEEncoder(Encoder):
     def init(self, device): # force lazy init to happen now
         super().init(device)
         if self._vae is None:
-            self._vae = load_stability_vae(self.vae_name, device=device)
+            self._vae = load_invae(self.vae_name, device=device)
         else:
             self._vae.to(device)
 
@@ -70,10 +73,10 @@ class StabilityVAEEncoder(Encoder):
         return dict(super().__getstate__(), _vae=None) # do not pickle the vae
 
     def _run_vae_encoder(self, x):
-        d = self._vae.encode(x)['latent_dist']
-        return torch.cat([d.mean, d.std], dim=1)
+        # invae.encode() now returns sampled latents directly
+        return self._vae.encode(x).sample()
 
-    def encode_pixels(self, x): # raw pixels => raw latents
+    def encode(self, x): # raw pixels => raw latents
         self.init(x.device)
         x = x.to(torch.float32) / 127.5 - 1
         x = torch.cat([self._run_vae_encoder(batch) for batch in x.split(self.batch_size)])
@@ -81,23 +84,36 @@ class StabilityVAEEncoder(Encoder):
 
 #----------------------------------------------------------------------------
 
-def load_stability_vae(vae_name='stabilityai/sd-vae-ft-mse', device=torch.device('cpu')):
-    import dnnlib
-    cache_dir = dnnlib.make_cache_dir_path('diffusers')
-    os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
-    os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-    os.environ['HF_HOME'] = cache_dir
-
-
-    import diffusers # pip install diffusers # pyright: ignore [reportMissingImports]
+def load_invae(vae_name="REPA-E/e2e-invae", device=torch.device('cpu')):
+    import os, sys
     try:
-        # First try with local_files_only to avoid consulting tfhub metadata if the model is already in cache.
-        vae = diffusers.models.AutoencoderKL.from_pretrained(
-            vae_name, cache_dir=cache_dir, local_files_only=True
-            )
-    except:
-        # Could not load the model from cache; try without local_files_only.
-        vae = diffusers.models.AutoencoderKL.from_pretrained(vae_name, cache_dir=cache_dir)
+        # If encoders.py is imported as part of a package (e.g., REG.preprocessing.encoders)
+        from ..models.invae import VAE_F16D32
+    except ImportError:
+        try:
+            # If running with project root on sys.path
+            from models.invae import VAE_F16D32
+        except ImportError:
+            # Fallback: add project root (one level up from this file) to sys.path
+            sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+            from models.invae import VAE_F16D32
+
+    # Get cache dir from hf
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache/huggingface/hub")
+    # Download https://huggingface.co/REPA-E/e2e-invae/resolve/main/e2e-invae-400k.pt to cache_dir
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    vae_path = os.path.join(cache_dir, "e2e-invae-400k.pt")
+    if not os.path.exists(vae_path):
+        import requests
+        url = "https://huggingface.co/REPA-E/e2e-invae/resolve/main/e2e-invae-400k.pt"
+        r = requests.get(url)
+        with open(vae_path, "wb") as f:
+            f.write(r.content)
+        print(f"Downloaded {vae_path}")
+
+    vae = VAE_F16D32().to(device)
+    vae.load_state_dict(torch.load(vae_path, map_location=device))
     return vae.eval().requires_grad_(False).to(device)
 
 #----------------------------------------------------------------------------
