@@ -140,21 +140,7 @@ def main(args):
             )
     else:
         raise NotImplementedError()
-    z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
-    block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
-    model = SiT_models[args.model](
-        input_size=latent_size,
-        num_classes=args.num_classes,
-        use_cfg = (args.cfg_prob > 0),
-        z_dims = z_dims,
-        encoder_depth=args.encoder_depth,
-        **block_kwargs
-    )
 
-    model = model.to(device)
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
-    
     # Load custom invae model
     vae = load_invae(args.vae_name, device=device)
     vae.eval().requires_grad_(False)
@@ -164,6 +150,22 @@ def main(args):
     scaling_factor = 0.3099
     latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
+
+    z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
+    block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
+    model = SiT_models[args.model](
+        input_size=latent_size,
+        in_channels=channels,
+        num_classes=args.num_classes,
+        use_cfg = (args.cfg_prob > 0),
+        z_dims = z_dims,
+        **block_kwargs
+    )
+
+    model = model.to(device)
+    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
+    requires_grad(ema, False)
+    
 
     # create loss function
     loss_fn = SILoss(
@@ -337,11 +339,11 @@ def main(args):
                         model=ema,
                         latents=xT.clone(),
                         y=ys.clone(),
-                        num_steps=250,
+                        num_steps=args.num_sample_steps,
                         heun=False,
-                        cfg_scale=4.,
-                        guidance_low=0.,
-                        guidance_high=1.,
+                        cfg_scale=args.cfg_scale,
+                        guidance_low=args.guidance_low,
+                        guidance_high=args.guidance_high,
                         path_type=args.path_type,
                         cls_latents=cls_z.clone(),
                         args=args,
@@ -403,7 +405,6 @@ def parse_args(input_args=None):
     # model
     parser.add_argument("--model", type=str)
     parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--encoder-depth", type=int, default=8)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
@@ -445,6 +446,13 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+
+    # sampling specific
+    parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
+    parser.add_argument("--cls-cfg-scale", type=float, default=1.0, help="CLS guidance scale (used inside sampler).")
+    parser.add_argument("--guidance-low", type=float, default=0.0)
+    parser.add_argument("--guidance-high", type=float, default=1.0)
+    parser.add_argument("--num-sample-steps", type=int, default=50, help="Diffusion sampling steps for in-training sampling.")
 
     if input_args is not None:
         args = parser.parse_args(input_args)

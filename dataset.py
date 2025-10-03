@@ -18,7 +18,7 @@ class CustomDataset(Dataset):
         PIL.Image.init()
         supported_ext = PIL.Image.EXTENSION.keys() | {'.npy'}
 
-        self.images_dir = os.path.join(data_dir, 'imagenet_256_vae')
+        self.images_dir = os.path.join(data_dir, 'images')
         self.features_dir = os.path.join(data_dir, 'vae-in')
 
         # images
@@ -57,8 +57,7 @@ class CustomDataset(Dataset):
         return os.path.splitext(fname)[1].lower()
 
     def __len__(self):
-        assert len(self.image_fnames) == len(self.feature_fnames), \
-            "Number of feature files and label files should be same"
+        assert len(self.image_fnames) == len(self.feature_fnames), f"Number of feature files and label files should be same. image_fnames: {len(self.image_fnames)}, feature_fnames: {len(self.feature_fnames)}"
         return len(self.feature_fnames)
 
     def __getitem__(self, idx):

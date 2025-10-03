@@ -65,9 +65,9 @@ def main(args):
     model = SiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes,
+        in_channels=32,
         use_cfg = True,
         z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
-        encoder_depth=args.encoder_depth,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -94,14 +94,14 @@ def main(args):
 
     model.eval()  # important!
     # Load invae model using load_invae function
-    vae = load_invae("REPA-E/e2e-invae", device=device)
+    vae = load_invae("REPA-E/e2e-invae").to(device)
     vae.eval().requires_grad_(False)
 
 
     # Create folder to save samples:
     model_string_name = args.model.replace("/", "-")
     ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
-    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-{args.vae}-" \
+    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-invae-" \
                   f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}"
     sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
@@ -193,7 +193,6 @@ if __name__ == "__main__":
     # model
     parser.add_argument("--model", type=str, choices=list(SiT_models.keys()), default="SiT-XL/2")
     parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--encoder-depth", type=int, default=8)
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)

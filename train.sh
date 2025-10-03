@@ -10,15 +10,15 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --path-type="linear" \
     --prediction="v" \
     --weighting="uniform" \
-    --model="SiT-XL/2" \
+    --model="SiT-XL/1" \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
-    --encoder-depth=8 \
     --output-dir="exps" \
-    --exp-name="xl2-reg-invae" \
+    --exp-name="xl1-reg-invae" \
     --batch-size=256 \
     --data-dir="dataset" \
-    --cls=0.03
+    --cls=0.03 \
+    --resume-step=120000
 
 
     #Dataset Path
