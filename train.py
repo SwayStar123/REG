@@ -33,6 +33,8 @@ from torchvision.transforms import Normalize
 from samplers import euler_maruyama_sampler
 from PIL import Image
 
+from models.discriminator import build_sara_discriminator
+
 logger = get_logger(__name__)
 
 def preprocess_raw_image(x, enc_type):
@@ -209,6 +211,11 @@ def main(args):
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
+
+    disc = build_sara_discriminator(in_dim=z_dims[0], device=device)
+    optD = torch.optim.AdamW(disc.parameters(),
+                            lr=args.learning_rate, betas=(args.adam_beta1, args.adam_beta2),
+                            weight_decay=args.adam_weight_decay, eps=args.adam_epsilon)
     
     # resume:
     global_step = 0
@@ -222,9 +229,11 @@ def main(args):
         ema.load_state_dict(ckpt['ema'])
         optimizer.load_state_dict(ckpt['opt'])
         global_step = ckpt['steps']
+        disc.load_state_dict(ckpt['disc'], strict=True)
+        optD.load_state_dict(ckpt['optD'])
 
-    model, optimizer, train_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader
+    model, disc, optimizer, optD, train_dataloader = accelerator.prepare(
+        model, disc, optimizer, optD, train_dataloader
     )
 
     if accelerator.is_main_process:
@@ -297,14 +306,43 @@ def main(args):
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2, struc_loss, zs_tilde = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
-                loss = loss_mean + proj_loss_mean + loss_mean_cls
+                struc_loss_mean = struc_loss.mean() * args.struc_coeff
 
+                # --- discriminator update (infrequent) ---
+                if global_step % args.d_every == 0:
+                    # real: encoder tokens; fake: projected denoiser tokens
+                    z_real = zs[0].detach()            # [B,T,D], may include CLS; disc drops it
+                    h_fake = zs_tilde[0].detach()
+
+                    disc.train()
+                    optD.zero_grad(set_to_none=True)
+
+                    logits_real = disc(z_real)
+                    logits_fake = disc(h_fake)
+
+                    # L_D = -E[log D(z_enc)] - E[log(1 - D(h_den))]
+                    loss_D = -(F.logsigmoid(logits_real).mean() + F.logsigmoid(-logits_fake).mean())
+                    accelerator.backward(loss_D)
+                    if accelerator.sync_gradients:
+                        params_to_clip = disc.parameters()
+                        grad_norm_disc = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    optD.step()
+
+                # --- generator-side adversarial loss (always computed) ---
+                # freeze D so gradients flow only into the generator
+                requires_grad(disc, False)
+                logits_fake_g = disc(zs_tilde[0])        # do NOT detach to backprop into model
+                adv_loss_gen = -F.logsigmoid(logits_fake_g).mean()
+                requires_grad(disc, True)
+                adv_loss_weighted = adv_loss_gen * args.adv_coeff
+
+                loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean + adv_loss_weighted
 
                 ## optimization
                 accelerator.backward(loss)
@@ -324,12 +362,15 @@ def main(args):
             if global_step % args.checkpointing_steps == 0 and global_step > 0:
                 if accelerator.is_main_process:
                     checkpoint = {
-                        "model": model.module.state_dict(),
+                        "model": model.module.state_dict() if hasattr(model, "module") else model.state_dict(),
                         "ema": ema.state_dict(),
                         "opt": optimizer.state_dict(),
                         "args": args,
                         "steps": global_step,
+                        "disc": disc.module.state_dict() if hasattr(disc, "module") else disc.state_dict(),
+                        "optD": optD.state_dict(),
                     }
+
                     checkpoint_path = f"{checkpoint_dir}/{global_step:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
@@ -369,8 +410,15 @@ def main(args):
                 "loss_mean": accelerator.gather(loss_mean).mean().detach().item(),
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
-                "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
+                "struc_loss": accelerator.gather(struc_loss_mean).mean().detach().item(),
+                "adv_loss_g": accelerator.gather(adv_loss_weighted).mean().detach().item(),
+                "grad_norm": accelerator.gather(grad_norm).mean().detach().item(),
             }
+
+            # Only add discriminator logging at discriminator steps
+            if global_step % args.d_every == 0:
+                logs["loss_D"] = accelerator.gather(loss_D).mean().detach().item()
+                logs["grad_norm_disc"] = accelerator.gather(grad_norm_disc).mean().detach().item()
 
             log_message = ", ".join(f"{key}: {value:.6f}" for key, value in logs.items())
             logging.info(f"Step: {global_step}, Training Logs: {log_message}")
@@ -446,6 +494,10 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+    parser.add_argument("--struc-coeff", type=float, default=0.5)   # β
+    parser.add_argument("--adv-coeff",   type=float, default=0.05)  # γ
+    # adversarial schedule
+    parser.add_argument("--d-every", type=int, default=5, help="Update D every N generator steps.")
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
