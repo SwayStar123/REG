@@ -14,11 +14,10 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="xl1-reg-invae" \
+    --exp-name="xl1-reg-invae-sara" \
     --batch-size=256 \
     --data-dir="dataset" \
-    --cls=0.03 \
-    --resume-step=120000
+    --cls=0.03
 
 
     #Dataset Path

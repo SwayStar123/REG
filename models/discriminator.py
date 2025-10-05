@@ -22,6 +22,11 @@ class SARAResNet18Discriminator(nn.Module):
         super().__init__()
         self.tokens_to_img = nn.Conv2d(in_dim, 3, kernel_size=1)
         backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        # Disable all in-place ReLUs to avoid autograd version-counter issues
+        for m in backbone.modules():
+            if isinstance(m, torch.nn.ReLU):
+                m.inplace = False
+
         self.stem = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool)
         self.body = nn.Sequential(backbone.layer1, backbone.layer2)
         self.avg = nn.AdaptiveAvgPool2d((1, 1))

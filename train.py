@@ -212,7 +212,8 @@ def main(args):
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
 
-    disc = build_sara_discriminator(in_dim=z_dims[0], device=device)
+    disc = build_sara_discriminator(in_dim=z_dims[0], device=device).float()
+    disc = torch.nn.SyncBatchNorm.convert_sync_batchnorm(disc)
     optD = torch.optim.AdamW(disc.parameters(),
                             lr=args.learning_rate, betas=(args.adam_beta1, args.adam_beta2),
                             weight_decay=args.adam_weight_decay, eps=args.adam_epsilon)
@@ -223,7 +224,7 @@ def main(args):
         ckpt_name = str(args.resume_step).zfill(7) +'.pt'
         ckpt = torch.load(
             f'{os.path.join(args.output_dir, args.exp_name)}/checkpoints/{ckpt_name}',
-            map_location='cpu',
+            map_location='cpu', weights_only=False,
             )
         model.load_state_dict(ckpt['model'])
         ema.load_state_dict(ckpt['ema'])
@@ -316,29 +317,26 @@ def main(args):
 
                 # --- discriminator update (infrequent) ---
                 if global_step % args.d_every == 0:
-                    # real: encoder tokens; fake: projected denoiser tokens
-                    z_real = zs[0].detach()            # [B,T,D], may include CLS; disc drops it
+                    z_real = zs[0].detach()
                     h_fake = zs_tilde[0].detach()
+                    with accelerator.accumulate(disc):
+                        disc.train()
+                        optD.zero_grad(set_to_none=True)
+                        # run BN in fp32
+                        with torch.amp.autocast("cuda", enabled=False):
+                            logits_real = disc(z_real.float())
+                            logits_fake = disc(h_fake.float())
+                            loss_D = -(F.logsigmoid(logits_real).mean() + F.logsigmoid(-logits_fake).mean())
+                        accelerator.backward(loss_D)
+                        if accelerator.sync_gradients:
+                            grad_norm_disc = accelerator.clip_grad_norm_(disc.parameters(), args.max_grad_norm)
+                        optD.step()
 
-                    disc.train()
-                    optD.zero_grad(set_to_none=True)
-
-                    logits_real = disc(z_real)
-                    logits_fake = disc(h_fake)
-
-                    # L_D = -E[log D(z_enc)] - E[log(1 - D(h_den))]
-                    loss_D = -(F.logsigmoid(logits_real).mean() + F.logsigmoid(-logits_fake).mean())
-                    accelerator.backward(loss_D)
-                    if accelerator.sync_gradients:
-                        params_to_clip = disc.parameters()
-                        grad_norm_disc = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                    optD.step()
-
-                # --- generator-side adversarial loss (always computed) ---
-                # freeze D so gradients flow only into the generator
+                # --- generator-side adversarial loss ---
                 requires_grad(disc, False)
-                logits_fake_g = disc(zs_tilde[0])        # do NOT detach to backprop into model
-                adv_loss_gen = -F.logsigmoid(logits_fake_g).mean()
+                with torch.cuda.amp.autocast(enabled=False):
+                    logits_fake_g = disc(zs_tilde[0].float())
+                    adv_loss_gen = -F.logsigmoid(logits_fake_g).mean()
                 requires_grad(disc, True)
                 adv_loss_weighted = adv_loss_gen * args.adv_coeff
 
