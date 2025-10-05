@@ -113,7 +113,7 @@ def load_invae(vae_name="REPA-E/e2e-invae", device=torch.device('cpu')):
         print(f"Downloaded {vae_path}")
 
     vae = VAE_F16D32().to(device)
-    vae.load_state_dict(torch.load(vae_path, map_location=device))
+    vae.load_state_dict(torch.load(vae_path, map_location=device, weights_only=False))
     return vae.eval().requires_grad_(False).to(device)
 
 #----------------------------------------------------------------------------

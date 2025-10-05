@@ -2,7 +2,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0100000"
-SAVE_PATH="exps/xl1-reg-invae"
+SAVE_PATH="exps/xl1-reg-invae-cfm"
 NUM_STEP=250
 MODEL_SIZE='XL'
 CFG_SCALE=1.0

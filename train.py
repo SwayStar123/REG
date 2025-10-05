@@ -297,13 +297,14 @@ def main(args):
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2, cfm_loss = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
-                loss = loss_mean + proj_loss_mean + loss_mean_cls
+                cfm_loss_mean = cfm_loss.mean() * args.cfm_coeff
+                loss = loss_mean + proj_loss_mean + loss_mean_cls + cfm_loss_mean
 
 
                 ## optimization
@@ -369,6 +370,7 @@ def main(args):
                 "loss_mean": accelerator.gather(loss_mean).mean().detach().item(),
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
+                "cfm_loss": accelerator.gather(cfm_loss_mean).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
             }
 
@@ -446,6 +448,8 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
+    parser.add_argument("--cfm-coeff", type=float, default=0.05)
+
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
