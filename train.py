@@ -212,12 +212,6 @@ def main(args):
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
 
-    disc = build_sara_discriminator(in_dim=z_dims[0], device=device).float()
-    disc = torch.nn.SyncBatchNorm.convert_sync_batchnorm(disc)
-    optD = torch.optim.AdamW(disc.parameters(),
-                            lr=args.learning_rate, betas=(args.adam_beta1, args.adam_beta2),
-                            weight_decay=args.adam_weight_decay, eps=args.adam_epsilon)
-    
     # resume:
     global_step = 0
     if args.resume_step > 0:
@@ -230,11 +224,9 @@ def main(args):
         ema.load_state_dict(ckpt['ema'])
         optimizer.load_state_dict(ckpt['opt'])
         global_step = ckpt['steps']
-        disc.load_state_dict(ckpt['disc'], strict=True)
-        optD.load_state_dict(ckpt['optD'])
 
-    model, disc, optimizer, optD, train_dataloader = accelerator.prepare(
-        model, disc, optimizer, optD, train_dataloader
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
     )
 
     if accelerator.is_main_process:
@@ -315,32 +307,7 @@ def main(args):
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
                 struc_loss_mean = struc_loss.mean() * args.struc_coeff
 
-                # --- discriminator update (infrequent) ---
-                if global_step % args.d_every == 0:
-                    z_real = zs[0].detach()
-                    h_fake = zs_tilde[0].detach()
-                    with accelerator.accumulate(disc):
-                        disc.train()
-                        optD.zero_grad(set_to_none=True)
-                        # run BN in fp32
-                        with torch.amp.autocast("cuda", enabled=False):
-                            logits_real = disc(z_real.float())
-                            logits_fake = disc(h_fake.float())
-                            loss_D = -(F.logsigmoid(logits_real).mean() + F.logsigmoid(-logits_fake).mean())
-                        accelerator.backward(loss_D)
-                        if accelerator.sync_gradients:
-                            grad_norm_disc = accelerator.clip_grad_norm_(disc.parameters(), args.max_grad_norm)
-                        optD.step()
-
-                # --- generator-side adversarial loss ---
-                requires_grad(disc, False)
-                with torch.cuda.amp.autocast(enabled=False):
-                    logits_fake_g = disc(zs_tilde[0].float())
-                    adv_loss_gen = -F.logsigmoid(logits_fake_g).mean()
-                requires_grad(disc, True)
-                adv_loss_weighted = adv_loss_gen * args.adv_coeff
-
-                loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean + adv_loss_weighted
+                loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean 
 
                 ## optimization
                 accelerator.backward(loss)
@@ -365,8 +332,6 @@ def main(args):
                         "opt": optimizer.state_dict(),
                         "args": args,
                         "steps": global_step,
-                        "disc": disc.module.state_dict() if hasattr(disc, "module") else disc.state_dict(),
-                        "optD": optD.state_dict(),
                     }
 
                     checkpoint_path = f"{checkpoint_dir}/{global_step:07d}.pt"
@@ -409,14 +374,8 @@ def main(args):
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
                 "struc_loss": accelerator.gather(struc_loss_mean).mean().detach().item(),
-                "adv_loss_g": accelerator.gather(adv_loss_weighted).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item(),
             }
-
-            # Only add discriminator logging at discriminator steps
-            if global_step % args.d_every == 0:
-                logs["loss_D"] = accelerator.gather(loss_D).mean().detach().item()
-                logs["grad_norm_disc"] = accelerator.gather(grad_norm_disc).mean().detach().item()
 
             log_message = ", ".join(f"{key}: {value:.6f}" for key, value in logs.items())
             logging.info(f"Step: {global_step}, Training Logs: {log_message}")
@@ -493,7 +452,6 @@ def parse_args(input_args=None):
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
     parser.add_argument("--struc-coeff", type=float, default=0.5)   # β
-    parser.add_argument("--adv-coeff",   type=float, default=0.05)  # γ
     # adversarial schedule
     parser.add_argument("--d-every", type=int, default=5, help="Update D every N generator steps.")
 
