@@ -2,8 +2,8 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0100000"
-SAVE_PATH="exps/xl1-reg-invae-cfm"
-NUM_STEP=250
+SAVE_PATH="exps/xl1-reg-invae"
+NUM_STEP=50
 MODEL_SIZE='XL'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
@@ -25,8 +25,7 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --cls-cfg-scale=${CLS_CFG_SCALE} \
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
-  --cls=768 \
-
+  --cls=768
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \
