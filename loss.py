@@ -96,6 +96,6 @@ class SILoss:
         proj_loss /= (len(zs) * bsz)
 
         cfm_target = torch.roll(model_target, shifts=1, dims=0)
-        cfm_loss = -((model_output - cfm_target) ** 2).mean()
+        cfm_loss = -((model_output - cfm_target) ** 2).mean() * time_input
 
         return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, cfm_loss

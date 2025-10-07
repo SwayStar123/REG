@@ -448,7 +448,7 @@ def parse_args(input_args=None):
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
-    parser.add_argument("--cfm-coeff", type=float, default=0.05)
+    parser.add_argument("--cfm-coeff", type=float, default=0.10)
 
 
     # sampling specific

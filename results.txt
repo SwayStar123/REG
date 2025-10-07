@@ -1,11 +1,24 @@
 XL/2 @ 100k
-Inception Score: 122.14485168457031                                                                                                                                                                                           
-FID: 7.156954631595056                                                                                                                                                                                                        
-sFID: 4.976955193591721                                                                                                                                                                                                       
-Precision: 0.75316                                                                                                                                                                                                            
-Recall: 0.5972
+    Baseline at 50 NFE:
+        Inception Score: 122.06355285644531
+        FID: 7.641778979403796
+        sFID: 4.973501150319407
+        Precision: 0.74478
+        Recall: 0.5997
+    Baseline at 250 NFE:
+        Inception Score: 122.14485168457031                                                                                                                                                                                           
+        FID: 7.156954631595056                                                                                                                                                                                                        
+        sFID: 4.976955193591721                                                                                                                                                                                                       
+        Precision: 0.75316                                                                                                                                                                                                            
+        Recall: 0.5972
 
-    with CFM:
+    with CFM at 50 NFE:
+        Inception Score: 125.59037780761719
+        FID: 7.139926340854231
+        sFID: 5.660893963723993
+        Precision: 0.76328
+        Recall: 0.5779
+    with CFM at 250 NFE:
         Inception Score: 123.948486328125
         FID: 7.239271648987028
         sFID: 6.1776850681528686
