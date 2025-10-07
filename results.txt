@@ -6,6 +6,13 @@ invae:
     Precision: 0.75316                                                                                                                                                                                                            
     Recall: 0.5972
 
+    with SARA_structural:
+        Inception Score: 128.22601318359375
+        FID: 6.38942277465793
+        sFID: 4.928585376668252
+        Precision: 0.75796
+        Recall: 0.5948
+
     XL/2 @ 400k
     Inception Score: 178.141357421875
     FID: 2.996033075112507
