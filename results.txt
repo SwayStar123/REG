@@ -12,6 +12,13 @@ invae:
         sFID: 4.928585376668252
         Precision: 0.75796
         Recall: 0.5948
+    
+        with TCFM 50 NFE:
+            Inception Score: 134.90113830566406
+            FID: 6.2577561472238585
+            sFID: 5.817315345553311
+            Precision: 0.77772
+            Recall: 0.5721
 
     XL/2 @ 400k
     Inception Score: 178.141357421875
