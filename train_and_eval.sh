@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-tcfm"
+EXP_NAME="xl1-reg-invae-tcfm-alt"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
@@ -18,8 +18,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --exp-name=${EXP_NAME} \
     --batch-size=256 \
     --data-dir="dataset" \
-    --max-train-steps=${STEP} \
-    --resume-step=10000
+    --max-train-steps=${STEP}
 
 
 SAVE_PATH="exps/${EXP_NAME}"
