@@ -299,15 +299,16 @@ def main(args):
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2, struc_loss, zs_tilde = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2, struc_loss, zs_tilde, cfm_loss = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
                 struc_loss_mean = struc_loss.mean() * args.struc_coeff
+                cfm_loss_mean = cfm_loss.mean() * args_cfm_coeff
 
-                loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean 
+                loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean + cfm_loss_mean
 
                 ## optimization
                 accelerator.backward(loss)
@@ -454,6 +455,8 @@ def parse_args(input_args=None):
     parser.add_argument("--struc-coeff", type=float, default=0.5)   # β
     # adversarial schedule
     parser.add_argument("--d-every", type=int, default=5, help="Update D every N generator steps.")
+    parser.add_argument("--cfm-coeff", type=float, default=0.10)
+    
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
