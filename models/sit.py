@@ -279,7 +279,7 @@ class SiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
     
-    def forward(self, x, t, y, return_logvar=False, cls_token=None):
+    def forward(self, x, t, y, return_hiddens: bool = False, return_logvar=False, cls_token=None):
         """
         Forward pass of SiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -304,14 +304,18 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
+        hiddens = [] if return_hiddens else None
         for i, block in enumerate(self.blocks):
             x = block(x, c)
+            if return_hiddens:
+                hiddens.append(x)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
-
+        if return_hiddens:
+            return x, zs, cls_token, hiddens
         return x, zs, cls_token
 
 

@@ -1,6 +1,58 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
+import torch.nn as nn
+
+def _pairwise_sq_l2(z: torch.Tensor) -> torch.Tensor:
+    """
+    z: [N, D] float tensor
+    returns: [N, N] matrix of squared L2 distances
+    """
+    # optional: compute in fp32 for stability, then cast back
+    z32 = z if z.dtype == torch.float32 else z.float()
+    n = (z32 * z32).sum(dim=1, keepdim=True)             # [N,1]
+    d = n + n.t() - 2.0 * (z32 @ z32.t())                # [N,N]
+    return d.clamp_min_(0.0)
+
+def _logmeanexp(x: torch.Tensor, dim=None) -> torch.Tensor:
+    m = x.max(dim=dim, keepdim=True).values
+    return (x - m).exp().mean(dim=dim).log() + m.squeeze(dim)
+
+class DispersiveLoss(nn.Module):
+    """
+    InfoNCE-style dispersive loss without positives (Eq. (6) in paper), ℓ2 distance, no feature normalization.
+    L_disp = log E_{i,j} [ exp( - ||z_i - z_j||^2 / tau ) ]
+    If given a list of hidden states, computes per-layer and averages.
+    """
+    def __init__(self, tau: float = 0.5, lambda_weight: float = 0.5):
+        super().__init__()
+        self.tau = tau
+        self.lambda_weight = lambda_weight
+
+    @torch.autocast(device_type="cuda", enabled=False)
+    def _disp_one(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        h: [N, T, D] or [N, D] activation from one Transformer block
+        flattens to [N, T*D] then computes dispersive loss
+        """
+        if h.dim() == 3:  # [N,T,D]
+            h = h.reshape(h.shape[0], -1)
+        # no normalization (paper’s best)
+        d = _pairwise_sq_l2(h)                              # [N,N]
+        v = (-d / self.tau).reshape(-1)                     # [N*N]
+        return _logmeanexp(v, dim=0)                        # scalar
+
+    def forward(self, hiddens) -> torch.Tensor:
+        """
+        hiddens: Tensor or List[Tensor] of per-block activations
+        returns: lambda_weight * mean_layer_disp
+        """
+        if isinstance(hiddens, (list, tuple)):
+            vals = [self._disp_one(h) for h in hiddens]
+            disp = torch.stack(vals).mean()
+        else:
+            disp = self._disp_one(hiddens)
+        return self.lambda_weight * disp
 
 def mean_flat(x):
     """
@@ -28,6 +80,7 @@ class SILoss:
         self.path_type = path_type
         self.encoders = encoders
         self.accelerator = accelerator
+        self.disp_crit = DispersiveLoss(tau=0.5, lambda_weight=0.5)
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -78,8 +131,10 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
-                                                    cls_token=cls_input)
+        model_output, zs_tilde, cls_output, hiddens = model(model_input, time_input.flatten(), **model_kwargs,
+                                                    cls_token=cls_input, return_hiddens=True)
+
+        disp_loss = self.disp_crit(hiddens)
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)
@@ -95,4 +150,5 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, disp_loss

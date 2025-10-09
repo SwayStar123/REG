@@ -5,6 +5,13 @@ sFID: 4.976955193591721
 Precision: 0.75316                                                                                                                                                                                                            
 Recall: 0.5972
 
+    with dispersive:
+        Inception Score: 122.23870849609375
+        FID: 7.15780994878719
+        sFID: 4.990732977533185
+        Precision: 0.75326
+        Recall: 0.5925
+
 XL/2 @ 400k
 Inception Score: 178.141357421875
 FID: 2.996033075112507

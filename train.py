@@ -297,13 +297,14 @@ def main(args):
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2 = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2, disp_loss = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
-                loss = loss_mean + proj_loss_mean + loss_mean_cls
+
+                loss = loss_mean + proj_loss_mean + loss_mean_cls + disp_loss
 
 
                 ## optimization
@@ -369,6 +370,7 @@ def main(args):
                 "loss_mean": accelerator.gather(loss_mean).mean().detach().item(),
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
+                "dispersive_loss": accelerator.gather(disp_loss).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
             }
 
