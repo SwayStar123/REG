@@ -6,11 +6,54 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+
+class Router:
+    """
+    Token routing for TREAD.
+    Select a subset of tokens (keep) → process → scatter back.
+    """
+    def __init__(self, seed=42):
+        self.seed = seed
+
+    def get_mask(self, x, selection_rate=0.0):
+        """
+        x: (B, N, C)
+        selection_rate: fraction of tokens to drop (0.0 ~ 1.0)
+        returns:
+            ids_keep: (B, N_keep) indices of tokens to keep (NOT guaranteed to be in ascending order)
+        """
+        batch_size, num_patches, _ = x.shape
+        device = x.device
+        num_mask = int(num_patches * selection_rate)
+        num_keep = num_patches - num_mask
+        noise_random = torch.rand(batch_size, num_patches, device=device)
+        # NOTE: ids_keep is in the order defined by random noise, not natural index order.
+        # This means the kept tokens are *unsorted* with respect to their original positions.
+        ids_shuffle = torch.argsort(noise_random, dim=1)
+        ids_keep = ids_shuffle[:, :num_keep]
+        return ids_keep
+
+    def start_route(self, x, ids_keep):
+        """
+        Gather kept tokens in the (potentially unsorted) order given by ids_keep.
+        """
+        x_masked = x.gather(1, ids_keep.unsqueeze(-1).expand(-1, -1, x.size(2)))
+        return x_masked
+
+    def end_route(self, masked_x, ids_keep, original_x):
+        """
+        Scatter routed tokens back to original positions.
+        """
+        x_unmasked = original_x.scatter(
+            1, ids_keep.unsqueeze(-1).expand(-1, -1, original_x.size(2)), masked_x
+        )
+        return x_unmasked
 
 
 def build_mlp(hidden_size, projector_dim, z_dim):
@@ -198,6 +241,8 @@ class SiT(nn.Module):
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
 
+        self.router = Router()
+
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
@@ -304,10 +349,32 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
+        # ---------------------- TREAD routing ----------------------
+        # Route a subset of tokens between early and late blocks.
+        route_start_idx = self.encoder_depth + 1
+        route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
+        do_route = self.training and (self.depth > route_start_idx + 1)
+
+        ids_keep_active: Optional[torch.Tensor] = None
+        x_before_route = None
+        # -----------------------------------------------------------
+
         for i, block in enumerate(self.blocks):
+            # start routing: select and gather kept tokens
+            if do_route and ids_keep_active is None and i == route_start_idx:
+                x_before_route = x.clone()
+                ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
+                x = self.router.start_route(x, ids_keep_active)
+
             x = block(x, c)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+
+            # end routing: scatter tokens back to original positions
+            if do_route and ids_keep_active is not None and i == route_end_idx:
+                x = self.router.end_route(x, ids_keep_active, original_x=x_before_route)
+                ids_keep_active = None
+                x_before_route = None
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
