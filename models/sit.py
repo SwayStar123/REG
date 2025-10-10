@@ -240,6 +240,7 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.depth = depth
 
         self.router = Router()
 
@@ -317,7 +318,7 @@ class SiT(nn.Module):
         c = self.out_channels
         p = self.x_embedder.patch_size[0] if patch_size is None else patch_size
         h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
+        assert h * w == x.shape[1], f"Got h: {h}, w: {w}, but x.shape[1] is {x.shape[1]}"
 
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
         x = torch.einsum('nhwpqc->nchpwq', x)
@@ -351,7 +352,7 @@ class SiT(nn.Module):
 
         # ---------------------- TREAD routing ----------------------
         # Route a subset of tokens between early and late blocks.
-        route_start_idx = self.encoder_depth + 1
+        route_start_idx = 2
         route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
         do_route = self.training and (self.depth > route_start_idx + 1)
 
@@ -363,12 +364,14 @@ class SiT(nn.Module):
             # start routing: select and gather kept tokens
             if do_route and ids_keep_active is None and i == route_start_idx:
                 x_before_route = x.clone()
-                ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
-                x = self.router.start_route(x, ids_keep_active)
 
             x = block(x, c)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+
+                if do_route:
+                    ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
+                    x = self.router.start_route(x, ids_keep_active)
 
             # end routing: scatter tokens back to original positions
             if do_route and ids_keep_active is not None and i == route_end_idx:

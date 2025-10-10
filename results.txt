@@ -5,6 +5,20 @@ sFID: 4.976955193591721
 Precision: 0.75316                                                                                                                                                                                                            
 Recall: 0.5972
 
+    with TREAD:
+        Inception Score: 121.4339370727539
+        FID: 7.37317540812694
+        sFID: 4.901245400766015
+        Precision: 0.75508
+        Recall: 0.5693
+
+    with TREAD_delayed: # route start is 2, but tokens are not removed till repa alignment layer. (hidden state from layer 2 is used for route end)
+        Inception Score: 179.97152709960938
+        FID: 4.430485702901592
+        sFID: 5.061919807880599
+        Precision: 0.83196
+        Recall: 0.5185
+
 XL/2 @ 400k
 Inception Score: 178.141357421875
 FID: 2.996033075112507
