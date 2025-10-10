@@ -28,6 +28,7 @@ class SILoss:
         self.path_type = path_type
         self.encoders = encoders
         self.accelerator = accelerator
+        self.tread_type = "no_removal" # Pick from naive, official, delayed, no_removal
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -78,7 +79,7 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
+        model_output, zs_tilde, cls_output, ids_keep_mask = model(model_input, time_input.flatten(), **model_kwargs,
                                                     cls_token=cls_input)
 
         #denoising_loss
@@ -89,6 +90,12 @@ class SILoss:
         proj_loss = 0.
         bsz = zs[0].shape[0]
         for i, (z, z_tilde) in enumerate(zip(zs, zs_tilde)):
+
+            if self.tread_type == "official":
+                # z shape: (N, T_full, D), z_tilde shape: (N, T_masked, D)
+                # Mask the target z to match the masked z_tilde
+                z = z.gather(1, ids_keep_mask.unsqueeze(-1).expand(-1, -1, z.size(2)))
+        
             for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
                 z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1) 
                 z_j = torch.nn.functional.normalize(z_j, dim=-1) 
