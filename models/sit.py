@@ -6,12 +6,15 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
 import math
-from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
-
+from timm.models.vision_transformer import PatchEmbed, Mlp
+from models.pos_embed import VisionRotaryEmbeddingFast
+from models.swiglu_ffn import SwiGLU
+import torch.nn.functional as F
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -103,24 +106,93 @@ class LabelEmbedder(nn.Module):
 #                                 Core SiT Model                                #
 #################################################################################
 
+class Attention(nn.Module):
+    """
+    Attention module of LightningDiT.
+    """
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        qk_norm: bool = False,
+        attn_drop: float = 0.,
+        proj_drop: float = 0.,
+        norm_layer: nn.Module = nn.RMSNorm,
+        fused_attn: bool = True,
+    ) -> None:
+        super().__init__()
+        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.fused_attn = fused_attn
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x: torch.Tensor, rope=None, rope_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        x: (B, N, C)
+        rope: VisionRotaryEmbeddingFast or None
+        rope_ids: (B, N) original (flattened) token indices for RoPE when the sequence is a routed subset.
+                  If provided, RoPE is applied using these positions, preserving correct spatial encoding
+                  even when tokens are kept in an arbitrary (unsorted) order.
+        """
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+
+        if rope is not None:
+            # Apply 2D RoPE. If rope_ids is provided (e.g., under routing),
+            # use the original flattened positions to rotate q,k correctly.
+            if rope_ids is None:
+                q = rope(q)
+                k = rope(k)
+            else:
+                q = rope(q, rope_ids)
+                k = rope(k, rope_ids)
+
+        if self.fused_attn:
+            x = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.attn_drop.p if self.training else 0.,
+            )
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            x = attn @ v
+
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
 class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
-            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=block_kwargs["qk_norm"]
+            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=block_kwargs["qk_norm"], norm_layer=nn.RMSNorm
             )
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
-            )
+
+        self.mlp = SwiGLU(hidden_size, int(2/3 * mlp_hidden_dim))
+
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
@@ -142,7 +214,7 @@ class FinalLayer(nn.Module):
     """
     def __init__(self, hidden_size, patch_size, out_channels, cls_token_dim):
         super().__init__()
-        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
@@ -218,9 +290,15 @@ class SiT(nn.Module):
         cls_token_dim = z_dim
         self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
 
-
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
-        self.wg_norm = nn.LayerNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+        self.wg_norm = nn.RMSNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+
+        half_head_dim = hidden_size // num_heads // 2
+        hw_seq_len = input_size // patch_size
+        self.feat_rope = VisionRotaryEmbeddingFast(
+            dim=half_head_dim,
+            pt_seq_len=hw_seq_len,
+        )
 
         self.initialize_weights()
 
@@ -305,7 +383,7 @@ class SiT(nn.Module):
         c = t_embed + y
 
         for i, block in enumerate(self.blocks):
-            x = block(x, c)
+            x = block(x, c, self.feat_rope)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
 

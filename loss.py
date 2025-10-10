@@ -19,7 +19,7 @@ class SILoss:
             self,
             prediction='v',
             path_type="linear",
-            weighting="uniform",
+            weighting="lognormal",
             encoders=[], 
             accelerator=None, 
             ):
@@ -54,13 +54,8 @@ class SILoss:
             if self.weighting == "uniform":
                 time_input = torch.rand((images.shape[0], 1, 1, 1))
             elif self.weighting == "lognormal":
-                # sample timestep according to log-normal distribution of sigmas following EDM
-                rnd_normal = torch.randn((images.shape[0], 1 ,1, 1))
-                sigma = rnd_normal.exp()
-                if self.path_type == "linear":
-                    time_input = sigma / (1 + sigma)
-                elif self.path_type == "cosine":
-                    time_input = 2 / np.pi * torch.atan(sigma)
+                time_input = torch.rand((images.shape[0], 1, 1, 1))
+                time_input = torch.sigmoid(time_input, device=images.device, dtype=images.dtype)
                 
         time_input = time_input.to(device=images.device, dtype=images.dtype)
 
@@ -85,6 +80,9 @@ class SILoss:
         denoising_loss = mean_flat((model_output - model_target) ** 2)
         denoising_loss_cls = mean_flat((cls_output - cls_target) ** 2)
 
+        velocity_direction_loss = mean_flat(1 - F.cosine_similarity(model_output, model_target, dim=1))
+        velocity_direction_loss_cls = mean_flat(1 - F.cosine_similarity(cls_output, cls_target, dim=1))
+
         # projection loss
         proj_loss = 0.
         bsz = zs[0].shape[0]
@@ -95,4 +93,4 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, velocity_direction_loss, velocity_direction_loss_cls
