@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-tread-partial-align"
+EXP_NAME="xl1-reg-invae-tread-no_removal"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \

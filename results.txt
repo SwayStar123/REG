@@ -19,6 +19,14 @@ Recall: 0.5972
         Precision: 0.83196
         Recall: 0.5185
 
+    with TREAD_official # Partially align only the remaining tokens for repa
+        Inception Score: 203.10858154296875
+        FID: 4.6657103370556
+        sFID: 5.377818049010557
+        Precision: 0.84984
+        Recall: 0.4851
+
+
 XL/2 @ 400k
 Inception Score: 178.141357421875
 FID: 2.996033075112507
