@@ -6,18 +6,36 @@ Precision: 0.75316
 Recall: 0.5972
 
     with TREAD_naive: route is 9 -> 24 because repa alignment happens at 8
-        Inception Score: 121.4339370727539
-        FID: 7.37317540812694
-        sFID: 4.901245400766015
-        Precision: 0.75508
-        Recall: 0.5693
+        50 NFE:
+            Inception Score: 122.11589050292969
+            FID: 7.850157870891394
+            sFID: 4.9154244342240645
+            Precision: 0.75186
+            Recall: 0.5676
+        250 NFE:
+            Inception Score: 121.4339370727539
+            FID: 7.37317540812694
+            sFID: 4.901245400766015
+            Precision: 0.75508
+            Recall: 0.5693
+
 
     with TREAD_delayed: # route start is 2, but tokens are not removed till repa alignment layer. (hidden state from layer 2 is used for route end)
-        Inception Score: 179.97152709960938
-        FID: 4.430485702901592
-        sFID: 5.061919807880599
-        Precision: 0.83196
-        Recall: 0.5185
+        50 NFE:
+            Inception Score: 182.67727661132812
+            FID: 4.527395479047016
+            sFID: 4.934412003661237
+            Precision: 0.82616
+            Recall: 0.5161
+
+        250 NFE:
+            Inception Score: 179.97152709960938
+            FID: 4.430485702901592
+            sFID: 5.061919807880599
+            Precision: 0.83196
+            Recall: 0.5185
+
+
 
     with TREAD_official # Partially align only the remaining tokens for repa
         Inception Score: 203.10858154296875
