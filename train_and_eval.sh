@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-sara-tcfm"
+EXP_NAME="xl1-reg-invae-sara-tread"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
@@ -18,11 +18,12 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --exp-name=${EXP_NAME} \
     --batch-size=256 \
     --data-dir="dataset" \
-    --max-train-steps=${STEP}
+    --max-train-steps=${STEP} \
+    --cfm-coeff=0.0
 
 
 SAVE_PATH="exps/${EXP_NAME}"
-NUM_STEP=50
+NUM_STEP=250
 MODEL_SIZE='XL'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0

@@ -239,6 +239,8 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.depth = depth
+        
         self.router = Router()
 
         self.x_embedder = PatchEmbed(
