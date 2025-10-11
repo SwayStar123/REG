@@ -6,6 +6,7 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
@@ -346,10 +347,34 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
+        # ---------------------- TREAD routing ----------------------
+        # Route a subset of tokens between early and late blocks.
+        route_start_idx = 2
+        route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
+        do_route = self.training and (self.depth > route_start_idx + 1)
+
+        ids_keep_active: Optional[torch.Tensor] = None
+        x_before_route = None
+        # -----------------------------------------------------------
+
         for i, block in enumerate(self.blocks):
+            # start routing: select and gather kept tokens
+            if do_route and ids_keep_active is None and i == route_start_idx:
+                x_before_route = x.clone()
+
             x = block(x, c)
             if (i + 1) == self.encoder_depth:
-                zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+                zs = [projector(x.reshape(-1, D)).reshape(N, T, z_dim) for projector, z_dim in zip(self.projectors, self.z_dims)]
+
+                if do_route:
+                    ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
+                    x = self.router.start_route(x, ids_keep_active)
+
+            # end routing: scatter tokens back to original positions
+            if do_route and ids_keep_active is not None and i == route_end_idx:
+                x = self.router.end_route(x, ids_keep_active, original_x=x_before_route)
+                ids_keep_active = None
+                x_before_route = None
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
