@@ -5,7 +5,7 @@ sFID: 4.976955193591721
 Precision: 0.75316                                                                                                                                                                                                            
 Recall: 0.5972
 
-    with TREAD:
+    with TREAD_naive: route is 9 -> 24 because repa alignment happens at 8
         Inception Score: 121.4339370727539
         FID: 7.37317540812694
         sFID: 4.901245400766015
@@ -25,6 +25,13 @@ Recall: 0.5972
         sFID: 5.377818049010557
         Precision: 0.84984
         Recall: 0.4851
+
+    with TREAD_no_removal: tokens are routed but not removed for intermediate transformer layers
+        Inception Score: 122.12178802490234
+        FID: 7.246849016160127
+        sFID: 4.9544061547167075
+        Precision: 0.7548
+        Recall: 0.5862
 
 
 XL/2 @ 400k
