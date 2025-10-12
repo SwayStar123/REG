@@ -104,6 +104,8 @@ class VisionRotaryEmbeddingFast(nn.Module):
           None           -> assume N == HW and use default [0..HW-1] order
           LongTensor(N,) -> shared positions for all batches (rare)
           LongTensor(B,N)-> per-batch positions (used for routing with unsorted ids_keep)
+      - cls_token (optional):
+          If True, the first token position is treated as a CLS token and RoPE is not applied to it.
     """
     def __init__(
         self,
@@ -115,8 +117,10 @@ class VisionRotaryEmbeddingFast(nn.Module):
         theta=10000,
         max_freq=10,
         num_freqs=1,
+        cls_token=True,
     ):
         super().__init__()
+        self.cls_token = cls_token
         if custom_freqs is not None:
             freqs = custom_freqs
         elif freqs_for == 'lang':
@@ -159,16 +163,20 @@ class VisionRotaryEmbeddingFast(nn.Module):
         - If rope_ids is None: shapes (1,1,N,D), assuming N==HW (standard full-grid order).
         - If rope_ids is (N,): shapes (1,1,N,D) with custom order shared by all batches.
         - If rope_ids is (B,N): shapes (B,1,N,D) with per-batch custom order.
+        
+        Note: When cls_token=True, N will be the number of spatial tokens (excluding CLS).
         """
         cos_table = self.freqs_cos.to(dtype=dtype, device=device)
         sin_table = self.freqs_sin.to(dtype=dtype, device=device)
 
         if rope_ids is None:
-            # Default sequential positions [0..HW-1], requires N == HW
-            assert N == cos_table.shape[0], \
-                f"When rope_ids is None, expected N == HW ({cos_table.shape[0]}), got N={N}"
-            cos = cos_table.view(1, 1, N, -1)
-            sin = sin_table.view(1, 1, N, -1)
+            # Default sequential positions [0..N-1]
+            # When cls_token=True, this will be [0..HW-1] for the spatial tokens
+            # The assertion is relaxed to allow N <= HW
+            assert N <= cos_table.shape[0], \
+                f"When rope_ids is None, expected N <= HW ({cos_table.shape[0]}), got N={N}"
+            cos = cos_table[:N].view(1, 1, N, -1)
+            sin = sin_table[:N].view(1, 1, N, -1)
             return cos, sin
 
         # Ensure long dtype for indexing
@@ -193,11 +201,40 @@ class VisionRotaryEmbeddingFast(nn.Module):
         """
         t: (B, Hh, N, D_rot) where D_rot == self.rot_dim
         rope_ids: None | (N,) | (B, N), indexing flattened HW positions
+        
+        If cls_token=True, the first token (position 0) is treated as CLS and RoPE is not applied to it.
         """
         B, Hh, N, D = t.shape
         assert D == self.rot_dim, \
             f"Head dim {D} must equal RoPE rotation dim {self.rot_dim} (got {D} != {self.rot_dim})"
 
-        cos, sin = self._gather_cos_sin(rope_ids, N, t.device, t.dtype)  # shapes (1 or B, 1, N, D)
-        # Broadcast over heads; cos/sin already have (1 or B, 1, N, D), so broadcasting to (B, Hh, N, D) is natural
-        return t * cos + rotate_half(t) * sin
+        if self.cls_token:
+            # Split CLS token (first position) from the rest
+            t_cls = t[:, :, :1, :]  # (B, Hh, 1, D)
+            t_spatial = t[:, :, 1:, :]  # (B, Hh, N-1, D)
+            
+            # Adjust rope_ids if provided to exclude the CLS token position
+            if rope_ids is not None:
+                if rope_ids.dim() == 1:
+                    # (N,) -> slice to (N-1,)
+                    rope_ids_spatial = rope_ids[1:]
+                elif rope_ids.dim() == 2:
+                    # (B, N) -> slice to (B, N-1)
+                    rope_ids_spatial = rope_ids[:, 1:]
+                else:
+                    raise ValueError(f"rope_ids must be None, (N,), or (B,N); got shape {tuple(rope_ids.shape)}")
+            else:
+                rope_ids_spatial = None
+            
+            # Apply RoPE only to spatial tokens
+            N_spatial = N - 1
+            cos, sin = self._gather_cos_sin(rope_ids_spatial, N_spatial, t_spatial.device, t_spatial.dtype)
+            t_spatial_rotated = t_spatial * cos + rotate_half(t_spatial) * sin
+            
+            # Concatenate CLS token back
+            return torch.cat([t_cls, t_spatial_rotated], dim=2)
+        else:
+            # Original behavior: apply RoPE to all tokens
+            cos, sin = self._gather_cos_sin(rope_ids, N, t.device, t.dtype)  # shapes (1 or B, 1, N, D)
+            # Broadcast over heads; cos/sin already have (1 or B, 1, N, D), so broadcasting to (B, Hh, N, D) is natural
+            return t * cos + rotate_half(t) * sin

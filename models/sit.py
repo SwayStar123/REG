@@ -11,10 +11,44 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from timm.models.vision_transformer import PatchEmbed, Mlp
+from timm.models.vision_transformer import PatchEmbed
 from models.pos_embed import VisionRotaryEmbeddingFast
 from models.swiglu_ffn import SwiGLU
 import torch.nn.functional as F
+
+class RMSNorm(nn.Module):
+    def __init__(self, normalized_shape, eps: float = 1e-6, elementwise_affine: bool = True, bias: bool = True, device=None, dtype=None):
+        super().__init__()
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.normalized_shape = (normalized_shape,) if isinstance(normalized_shape, int) else tuple(normalized_shape)
+
+        if self.elementwise_affine:
+            factory_kwargs = {"device": device, "dtype": dtype}
+            self.weight = nn.Parameter(torch.ones(self.normalized_shape, **factory_kwargs))
+            if bias:
+                self.bias = nn.Parameter(torch.zeros(self.normalized_shape, **factory_kwargs))
+            else:
+                self.register_parameter("bias", None)
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dims = tuple(range(-len(self.normalized_shape), 0))
+        x_float = x.float()
+        rms = torch.rsqrt(x_float.pow(2).mean(dim=dims, keepdim=True) + self.eps)
+        y = (x_float * rms).to(dtype=x.dtype)
+
+        if self.elementwise_affine:
+            if self.bias is not None:
+                y = y * self.weight + self.bias
+            else:
+                y = y * self.weight
+        return y
+
+    def extra_repr(self) -> str:
+        return f"normalized_shape={self.normalized_shape}, eps={self.eps}, elementwise_affine={self.elementwise_affine}, bias={self.bias is not None}"
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -118,7 +152,7 @@ class Attention(nn.Module):
         qk_norm: bool = False,
         attn_drop: float = 0.,
         proj_drop: float = 0.,
-        norm_layer: nn.Module = nn.RMSNorm,
+        norm_layer: nn.Module = RMSNorm,
         fused_attn: bool = True,
     ) -> None:
         super().__init__()
@@ -182,13 +216,13 @@ class SiTBlock(nn.Module):
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
-        self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm1 = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
-            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=block_kwargs["qk_norm"], norm_layer=nn.RMSNorm
+            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=block_kwargs["qk_norm"], norm_layer=RMSNorm
             )
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
-        self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm2 = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
 
         self.mlp = SwiGLU(hidden_size, int(2/3 * mlp_hidden_dim))
@@ -198,11 +232,11 @@ class SiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c):
+    def forward(self, x, c, feat_rope=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
 
         return x
@@ -214,7 +248,7 @@ class FinalLayer(nn.Module):
     """
     def __init__(self, hidden_size, patch_size, out_channels, cls_token_dim):
         super().__init__()
-        self.norm_final = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
@@ -291,13 +325,14 @@ class SiT(nn.Module):
         self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
 
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
-        self.wg_norm = nn.RMSNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+        self.wg_norm = RMSNorm(hidden_size, elementwise_affine=True, eps=1e-6)
 
         half_head_dim = hidden_size // num_heads // 2
         hw_seq_len = input_size // patch_size
         self.feat_rope = VisionRotaryEmbeddingFast(
             dim=half_head_dim,
             pt_seq_len=hw_seq_len,
+            cls_token=True,  # Enable CLS token support
         )
 
         self.initialize_weights()

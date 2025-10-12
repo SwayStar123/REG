@@ -372,7 +372,7 @@ def main(args):
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
                 "veldir": accelerator.gather(veldir_mean).mean().detach().item(),
-                "veldir_cls": accelerator.gather(veldir_cls_mean).mean().detach().
+                "veldir_cls": accelerator.gather(veldir_cls_mean).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
             }
 
