@@ -33,7 +33,7 @@ invae:
                 Precision: 0.84536
                 Recall: 0.4769
 
-        with TREAD 250 NFE:
+        with TREAD 250 NFE: # Without TCFM
             Inception Score: 183.04335021972656
             FID: 4.731133795863968
             sFID: 5.5516361728850825
