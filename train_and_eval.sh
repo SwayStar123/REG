@@ -19,7 +19,8 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --batch-size=256 \
     --data-dir="dataset" \
     --max-train-steps=${STEP} \
-    --cfm-coeff=0.0
+    --cfm-coeff=0.0 \
+    --resume-step=20000
 
 
 SAVE_PATH="exps/${EXP_NAME}"
