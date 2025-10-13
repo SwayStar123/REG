@@ -19,7 +19,7 @@ class SILoss:
             self,
             prediction='v',
             path_type="linear",
-            weighting="uniform",
+            weighting="lognormal",
             encoders=[], 
             accelerator=None, 
             ):

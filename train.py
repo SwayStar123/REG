@@ -443,7 +443,7 @@ def parse_args(input_args=None):
     parser.add_argument("--cfg-prob", type=float, default=0.1)
     parser.add_argument("--enc-type", type=str, default='dinov2-vit-b')
     parser.add_argument("--proj-coeff", type=float, default=0.5)
-    parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
+    parser.add_argument("--weighting", default="lognormal", type=str, help="Timestep sampling weighting scheme. Options: 'uniform', 'lognormal'.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
 

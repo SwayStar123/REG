@@ -9,7 +9,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --seed=0 \
     --path-type="linear" \
     --prediction="v" \
-    --weighting="uniform" \
+    --weighting="lognormal" \
     --model="SiT-XL/1" \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
