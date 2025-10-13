@@ -194,8 +194,8 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, choices=list(SiT_models.keys()), default="SiT-XL/2")
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
-    parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=True)
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)
