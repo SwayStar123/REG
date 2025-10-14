@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-lightning1"
+EXP_NAME="xl1-reg-invae-lightning1-veldir2"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
@@ -10,7 +10,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --seed=0 \
     --path-type="linear" \
     --prediction="v" \
-    --weighting="lognormal" \
+    --weighting="uniform" \
     --model="SiT-XL/1" \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
