@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 def preprocess_raw_image(x, enc_type):
     resolution = x.shape[-1]
     x = x / 255.
-    x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
+    x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)4
     x = torch.nn.functional.interpolate(x, 224 * (resolution // 256), mode='bicubic')
 
     return x

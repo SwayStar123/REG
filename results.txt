@@ -17,6 +17,12 @@ Recall: 0.5972
         sFID: 5.187021912655041
         Precision: 0.71684
         Recall: 0.6034
+    with velocity direction loss b:
+        Inception Score: 100.4708480834961
+        FID: 10.644976982275637
+        sFID: 5.177864251108417
+        Precision: 0.7162
+        Recall: 0.6085
 
 
 XL/2 @ 400k
