@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from timm.models.vision_transformer import PatchEmbed, Attention
 from swiglu_ffn import SwiGLU
 
 
@@ -35,11 +35,7 @@ class TimestepEmbedder(nn.Module):
     """
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
-        )
+        self.mlp = SwiGLU(hidden_size, int(2/3 * hidden_size))
         self.frequency_embedding_size = frequency_embedding_size
     
     @staticmethod
@@ -118,10 +114,7 @@ class SiTBlock(nn.Module):
             self.attn.fused_attn = block_kwargs["fused_attn"]
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
-            )
+        self.mlp = SwiGLU(hidden_size, int(2/3 * mlp_hidden_dim))
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)

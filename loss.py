@@ -85,9 +85,6 @@ class SILoss:
         denoising_loss = mean_flat((model_output - model_target) ** 2)
         denoising_loss_cls = mean_flat((cls_output - cls_target) ** 2)
 
-        velocity_direction_loss = 1 - mean_flat(F.cosine_similarity(model_output, model_target, dim=1))
-        velocity_direction_loss += 1 - mean_flat(F.cosine_similarity(cls_output, cls_target, dim=1))
-
         # projection loss
         proj_loss = 0.
         bsz = zs[0].shape[0]
@@ -98,4 +95,4 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, velocity_direction_loss
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
