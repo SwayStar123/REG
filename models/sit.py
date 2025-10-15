@@ -11,6 +11,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from swiglu_ffn import SwiGLU
 
 
 def build_mlp(hidden_size, projector_dim, z_dim):
