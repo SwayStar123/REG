@@ -30,6 +30,13 @@ Recall: 0.5972
         Precision: 0.75822
         Recall: 0.5856
 
+        with rmsnorm: 3.12 it/s:
+            Inception Score: 132.65943908691406
+            FID: 5.921274851961471
+            sFID: 4.9107513180101705
+            Precision: 0.75502
+            Recall: 0.5997
+
 
 XL/2 @ 400k: 2.99 it/s
 Inception Score: 178.141357421875
