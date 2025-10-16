@@ -269,6 +269,7 @@ class SiT(nn.Module):
         self.feat_rope = VisionRotaryEmbeddingFast(
             dim=half_head_dim,
             pt_seq_len=hw_seq_len,
+            extra_tokens=1
         )
 
         self.initialize_weights()

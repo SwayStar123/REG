@@ -99,11 +99,12 @@ class VisionRotaryEmbeddingFast(nn.Module):
         dim,
         pt_seq_len=16,
         ft_seq_len=None,
-        custom_freqs = None,
-        freqs_for = 'lang',
-        theta = 10000,
-        max_freq = 10,
-        num_freqs = 1,
+        custom_freqs=None,
+        freqs_for='lang',
+        theta=10000,
+        max_freq=10,
+        num_freqs=1,
+        extra_tokens: int = 0,
     ):
         super().__init__()
         if custom_freqs:
@@ -117,19 +118,28 @@ class VisionRotaryEmbeddingFast(nn.Module):
         else:
             raise ValueError(f'unknown modality {freqs_for}')
 
-        if ft_seq_len is None: ft_seq_len = pt_seq_len
+        if ft_seq_len is None:
+            ft_seq_len = pt_seq_len
         t = torch.arange(ft_seq_len) / ft_seq_len * pt_seq_len
 
         freqs = torch.einsum('..., f -> ... f', t, freqs)
-        freqs = repeat(freqs, '... n -> ... (n r)', r = 2)
-        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim = -1)
+        freqs = repeat(freqs, '... n -> ... (n r)', r=2)
+        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
 
         freqs_cos = freqs.cos().view(-1, freqs.shape[-1])
         freqs_sin = freqs.sin().view(-1, freqs.shape[-1])
 
+        # ---- NEW: pad for extra leading tokens (e.g., CLS) with no rotation
+        if extra_tokens > 0:
+            pad_cos = torch.ones((extra_tokens, freqs_cos.shape[-1]), dtype=freqs_cos.dtype)
+            pad_sin = torch.zeros((extra_tokens, freqs_sin.shape[-1]), dtype=freqs_sin.dtype)
+            freqs_cos = torch.cat([pad_cos, freqs_cos], dim=0)
+            freqs_sin = torch.cat([pad_sin, freqs_sin], dim=0)
+        # ----
+
         self.register_buffer("freqs_cos", freqs_cos)
         self.register_buffer("freqs_sin", freqs_sin)
 
-        # print('======== shape of rope freq', self.freqs_cos.shape, '========')
-
-    def forward(self, t): return  t * self.freqs_cos + rotate_half(t) * self.freqs_sin
+    def forward(self, t):
+        # t: [B, H, T, D]; freqs_*: [T, D] with T including extra_tokens
+        return t * self.freqs_cos + rotate_half(t) * self.freqs_sin

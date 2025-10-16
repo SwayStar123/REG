@@ -37,6 +37,8 @@ Recall: 0.5972
             Precision: 0.75502
             Recall: 0.5997
 
+            with rope default (+1 extra token): 2.78 it/s
+
 
 XL/2 @ 400k: 2.99 it/s
 Inception Score: 178.141357421875
