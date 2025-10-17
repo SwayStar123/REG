@@ -222,11 +222,11 @@ class SiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c, feat_rope):
+    def forward(self, x, c, feat_rope, rope_ids):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope, rope_ids=rope_ids)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
 
         return x
@@ -293,9 +293,11 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.depth = depth
 
         # TREAD router
         self.router = Router()
+        self.tread_selection_rate = 0.5
 
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
@@ -327,7 +329,6 @@ class SiT(nn.Module):
         self.feat_rope = VisionRotaryEmbeddingFast(
             dim=half_head_dim,
             pt_seq_len=hw_seq_len,
-            extra_tokens=1
         )
 
         self.initialize_weights()
@@ -419,31 +420,41 @@ class SiT(nn.Module):
         route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
         do_route = self.training and (self.depth > route_start_idx + 1)
 
+        HW = self.x_embedder.num_patches
         ids_keep_active: Optional[torch.Tensor] = None
+        ids_keep_for_projector: Optional[torch.Tensor] = None
         x_before_route = None
         # -----------------------------------------------------------
 
         for i, block in enumerate(self.blocks):
             # start routing: select and gather kept tokens
             if do_route and ids_keep_active is None and i == route_start_idx:
-                x_before_route = x.clone()
-                ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
-                x = self.router.start_route(x, ids_keep_active)
+                cls_tok, x_sp = x[:, :1, :], x[:, 1:, :] 
+
+                ids_keep_active = self.router.get_mask(x_sp, selection_rate=self.tread_selection_rate)
+                x_routed_sp = self.router.start_route(x_sp, ids_keep_active)
+
+                x = torch.cat([cls_tok, x_routed_sp], dim=1)
 
             x = block(x, c, self.feat_rope, ids_keep_active)
             if (i + 1) == self.encoder_depth:
-                zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+                zs = [projector(x.reshape(-1, D)).reshape(N, -1, z_dim) for (projector, z_dim) in zip(self.projectors, self.z_dims)]
+                ids_keep_for_projector = ids_keep_active.clone() if ids_keep_active is not None else None
 
             # end routing: scatter tokens back to original positions
             if do_route and ids_keep_active is not None and i == route_end_idx:
-                x = self.router.end_route(x, ids_keep_active, original_x=x_before_route)
+                cls_tok, x_sp2 = x[:, :1, :], x[:, 1:, :]
+
+                x_sp_full = self.router.end_route(x_sp2, ids_keep_active, original_x=x_sp)
+                x = torch.cat([cls_tok, x_sp_full], dim=1)
+
                 ids_keep_active = None
                 x_before_route = None
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
 
-        return x, zs, cls_token
+        return x, zs, cls_token, ids_keep_for_projector
 
 
 #################################################################################

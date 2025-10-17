@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-lightning3-rope-default"
+EXP_NAME="xl1-reg-invae-lightning4-tread"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
