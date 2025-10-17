@@ -78,18 +78,8 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output, ids_keep = model(model_input, time_input.flatten(), **model_kwargs,
+        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
                                                     cls_token=cls_input)
-
-        if ids_keep is not None and zs is not None:
-            cls_indices = torch.zeros(ids_keep.shape[0], 1, device=ids_keep.device, dtype=ids_keep.dtype)
-            ids_keep_with_cls = torch.cat([cls_indices, ids_keep + 1], dim=1)
-            zs_masked = []
-            for z in zs:
-                gather_idx = ids_keep_with_cls.to(z.device, non_blocking=True)
-                gather_idx = gather_idx.unsqueeze(-1).expand(-1, -1, z.size(-1))
-                zs_masked.append(z.gather(1, gather_idx))
-            zs = zs_masked
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)

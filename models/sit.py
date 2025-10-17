@@ -388,7 +388,7 @@ class SiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
     
-    def forward(self, x, t, y, return_logvar=False, cls_token=None):
+    def forward(self, x, t, y, cls_token=None, do_routing=False):
         """
         Forward pass of SiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -418,43 +418,43 @@ class SiT(nn.Module):
         # Route a subset of tokens between early and late blocks.
         route_start_idx = 2
         route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
-        do_route = self.training and (self.depth > route_start_idx + 1)
+        do_route = (self.training or do_routing) and (self.depth > route_start_idx + 1)
 
-        HW = self.x_embedder.num_patches
         ids_keep_active: Optional[torch.Tensor] = None
-        ids_keep_for_projector: Optional[torch.Tensor] = None
-        x_before_route = None
         # -----------------------------------------------------------
 
         for i, block in enumerate(self.blocks):
             # start routing: select and gather kept tokens
             if do_route and ids_keep_active is None and i == route_start_idx:
-                cls_tok, x_sp = x[:, :1, :], x[:, 1:, :] 
-
-                ids_keep_active = self.router.get_mask(x_sp, selection_rate=self.tread_selection_rate)
-                x_routed_sp = self.router.start_route(x_sp, ids_keep_active)
-
-                x = torch.cat([cls_tok, x_routed_sp], dim=1)
+                x_sp_original = x[:, 1:, :] 
 
             x = block(x, c, self.feat_rope, ids_keep_active)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, -1, z_dim) for (projector, z_dim) in zip(self.projectors, self.z_dims)]
-                ids_keep_for_projector = ids_keep_active.clone() if ids_keep_active is not None else None
+
+                if do_route and ids_keep_active is None:
+                    cls_tok, x_sp = x[:, :1, :], x[:, 1:, :] 
+
+                    # Use spatial tokens from route start
+                    ids_keep_active = self.router.get_mask(x_sp, selection_rate=self.tread_selection_rate)
+                    x_routed_sp = self.router.start_route(x_sp, ids_keep_active)
+
+                    x = torch.cat([cls_tok, x_routed_sp], dim=1)
 
             # end routing: scatter tokens back to original positions
             if do_route and ids_keep_active is not None and i == route_end_idx:
                 cls_tok, x_sp2 = x[:, :1, :], x[:, 1:, :]
 
-                x_sp_full = self.router.end_route(x_sp2, ids_keep_active, original_x=x_sp)
+                x_sp_full = self.router.end_route(x_sp2, ids_keep_active, original_x=x_sp_original)
                 x = torch.cat([cls_tok, x_sp_full], dim=1)
 
                 ids_keep_active = None
-                x_before_route = None
+                x_sp_original = None
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
 
-        return x, zs, cls_token, ids_keep_for_projector
+        return x, zs, cls_token
 
 
 #################################################################################
