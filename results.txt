@@ -38,6 +38,11 @@ Recall: 0.5972
             Recall: 0.5997
 
             with rope default (+1 extra token): 2.78 it/s
+                Inception Score: 137.16067504882812ded
+                FID: 5.261466174003715
+                sFID: 4.796502675626925
+                Precision: 0.75532
+                Recall: 0.6101
 
 
 XL/2 @ 400k: 2.99 it/s

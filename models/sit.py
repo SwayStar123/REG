@@ -6,6 +6,7 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
@@ -15,6 +16,48 @@ from xformers.ops import SwiGLU
 from torch.nn import RMSNorm
 from models.pos_embed import VisionRotaryEmbeddingFast
 import torch.nn.functional as F
+
+class Router:
+    """
+    Token routing for TREAD.
+    Select a subset of tokens (keep) → process → scatter back.
+    """
+    def __init__(self, seed=42):
+        self.seed = seed
+
+    def get_mask(self, x, selection_rate=0.0):
+        """
+        x: (B, N, C)
+        selection_rate: fraction of tokens to drop (0.0 ~ 1.0)
+        returns:
+            ids_keep: (B, N_keep) indices of tokens to keep (NOT guaranteed to be in ascending order)
+        """
+        batch_size, num_patches, _ = x.shape
+        device = x.device
+        num_mask = int(num_patches * selection_rate)
+        num_keep = num_patches - num_mask
+        noise_random = torch.rand(batch_size, num_patches, device=device)
+        # NOTE: ids_keep is in the order defined by random noise, not natural index order.
+        # This means the kept tokens are *unsorted* with respect to their original positions.
+        ids_shuffle = torch.argsort(noise_random, dim=1)
+        ids_keep = ids_shuffle[:, :num_keep]
+        return ids_keep
+
+    def start_route(self, x, ids_keep):
+        """
+        Gather kept tokens in the (potentially unsorted) order given by ids_keep.
+        """
+        x_masked = x.gather(1, ids_keep.unsqueeze(-1).expand(-1, -1, x.size(2)))
+        return x_masked
+
+    def end_route(self, masked_x, ids_keep, original_x):
+        """
+        Scatter routed tokens back to original positions.
+        """
+        x_unmasked = original_x.scatter(
+            1, ids_keep.unsqueeze(-1).expand(-1, -1, original_x.size(2)), masked_x
+        )
+        return x_unmasked
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -53,14 +96,25 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
         
-    def forward(self, x: torch.Tensor, rope=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, rope=None, rope_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        x: (B, N, C)
+        rope: VisionRotaryEmbeddingFast or None
+        rope_ids: (B, N) original (flattened) token indices for RoPE when the sequence is a routed subset.
+                  If provided, RoPE is applied using these positions, preserving correct spatial encoding
+                  even when tokens are kept in an arbitrary (unsorted) order.
+        """
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         
-        q = rope(q)
-        k = rope(k)
+        if rope_ids is None:
+            q = rope(q)
+            k = rope(k)
+        else:
+            q = rope(q, rope_ids)
+            k = rope(k, rope_ids)
 
         x = F.scaled_dot_product_attention(
             q, k, v,
@@ -240,6 +294,9 @@ class SiT(nn.Module):
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
 
+        # TREAD router
+        self.router = Router()
+
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
@@ -247,7 +304,8 @@ class SiT(nn.Module):
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+        self.cls_pos_embed = nn.Parameter(torch.zeros(hidden_size))
 
         self.blocks = nn.ModuleList([
             SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
@@ -285,7 +343,7 @@ class SiT(nn.Module):
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
         pos_embed = get_2d_sincos_pos_embed(
-            self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5), cls_token=1, extra_tokens=1
+            self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5)
             )
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
@@ -339,12 +397,13 @@ class SiT(nn.Module):
 
         #cat with cls_token
         x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
+        x = x + self.pos_embed
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
             cls_token = self.wg_norm(cls_token)
+            cls_token = cls_token + self.cls_pos_embed.unsqueeze(0)
             cls_token = cls_token.unsqueeze(1)  # [b, length, d]
             x = torch.cat((cls_token, x), dim=1)
-            x = x + self.pos_embed
         else:
             exit()
         N, T, D = x.shape
@@ -354,10 +413,32 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t_embed + y
 
+        # ---------------------- TREAD routing ----------------------
+        # Route a subset of tokens between early and late blocks.
+        route_start_idx = 2
+        route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
+        do_route = self.training and (self.depth > route_start_idx + 1)
+
+        ids_keep_active: Optional[torch.Tensor] = None
+        x_before_route = None
+        # -----------------------------------------------------------
+
         for i, block in enumerate(self.blocks):
-            x = block(x, c, self.feat_rope)
+            # start routing: select and gather kept tokens
+            if do_route and ids_keep_active is None and i == route_start_idx:
+                x_before_route = x.clone()
+                ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
+                x = self.router.start_route(x, ids_keep_active)
+
+            x = block(x, c, self.feat_rope, ids_keep_active)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+
+            # end routing: scatter tokens back to original positions
+            if do_route and ids_keep_active is not None and i == route_end_idx:
+                x = self.router.end_route(x, ids_keep_active, original_x=x_before_route)
+                ids_keep_active = None
+                x_before_route = None
 
         x, cls_token = self.final_layer(x, c, cls=cls_token)
         x = self.unpatchify(x)
