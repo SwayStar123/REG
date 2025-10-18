@@ -241,7 +241,7 @@ class SiT(nn.Module):
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
         self.depth = depth
-        self.tread_type = "no_removal" # Pick from naive, official, delayed, no_removal
+        self.tread_selection_rate = 0.5
 
         self.router = Router()
 
@@ -353,7 +353,7 @@ class SiT(nn.Module):
 
         # ---------------------- TREAD routing ----------------------
         # Route a subset of tokens between early and late blocks.
-        route_start_idx = (self.encoder_depth + 1) if self.tread_type == "naive" else 2
+        route_start_idx = 2
         route_end_idx = max(route_start_idx, self.depth - 4)  # 24 when depth=28
         do_route = self.training and (self.depth > route_start_idx + 1)
 
@@ -365,17 +365,13 @@ class SiT(nn.Module):
             # start routing: select and gather kept tokens
             if do_route and ids_keep_active is None and i == route_start_idx:
                 x_before_route = x.clone()
-
-                if self.tread_type not in ["delayed", "no_removal"]:
-                    ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
-                    x = self.router.start_route(x, ids_keep_active)
-
+    
             x = block(x, c)
             if (i + 1) == self.encoder_depth:
                 zs = [projector(x.reshape(-1, D)).reshape(N, -1, z_dim) for projector, z_dim in zip(self.projectors, self.z_dims)]
 
-                if self.tread_type == "delayed" and do_route:
-                    ids_keep_active = self.router.get_mask(x, selection_rate=0.5)  # keep 50% tokens (unsorted subset)
+                if do_route:
+                    ids_keep_active = self.router.get_mask(x, selection_rate=self.tread_selection_rate)  # keep 50% tokens (unsorted subset)
                     x = self.router.start_route(x, ids_keep_active)
 
             # end routing: scatter tokens back to original positions

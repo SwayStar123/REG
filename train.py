@@ -215,7 +215,7 @@ def main(args):
     if args.resume_step > 0:
         ckpt_name = str(args.resume_step).zfill(7) +'.pt'
         ckpt = torch.load(
-            f'{os.path.join(args.output_dir, args.exp_name)}/checkpoints/{ckpt_name}',
+            f'{os.path.join(args.output_dir, args.exp_name)}/checkpoints/{ckpt_name}', weights_only=False,
             map_location='cpu',
             )
         model.load_state_dict(ckpt['model'])
@@ -268,6 +268,9 @@ def main(args):
     for epoch in range(args.epochs):
         model.train()
         for raw_image, x, y in train_dataloader:
+            if global_step == (args.max_train_steps - 10000): # Finetune tread to without routing for last 10k steps
+                model.module.tread_selection_rate = 0.0
+
             raw_image = raw_image.to(device)
             x = x.squeeze(dim=1).to(device)
             y = y.to(device)
