@@ -109,12 +109,13 @@ class Attention(nn.Module):
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         
-        if rope_ids is None:
-            q = rope(q)
-            k = rope(k)
-        else:
-            q = rope(q, rope_ids)
-            k = rope(k, rope_ids)
+        if rope is not None:
+            if rope_ids is None:
+                q = rope(q)
+                k = rope(k)
+            else:
+                q = rope(q, rope_ids)
+                k = rope(k, rope_ids)
 
         x = F.scaled_dot_product_attention(
             q, k, v,
@@ -326,10 +327,11 @@ class SiT(nn.Module):
 
         half_head_dim = hidden_size // num_heads // 2
         hw_seq_len = input_size // patch_size
-        self.feat_rope = VisionRotaryEmbeddingFast(
-            dim=half_head_dim,
-            pt_seq_len=hw_seq_len,
-        )
+        # self.feat_rope = VisionRotaryEmbeddingFast(
+        #     dim=half_head_dim,
+        #     pt_seq_len=hw_seq_len,
+        # )
+        self.feat_rope = None
 
         self.initialize_weights()
 
