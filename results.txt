@@ -35,6 +35,13 @@ Recall: 0.5972
             Precision: 0.83196
             Recall: 0.5185
 
+            with SwiGLU:
+                Inception Score: 193.91566467285156
+                FID: 4.235244318605282
+                sFID: 5.250547673239453
+                Precision: 0.83546
+                Recall: 0.5102
+
             with finetuning:
                 Inception Score: 154.89649963378906
                 FID: 4.756767133259984
@@ -48,6 +55,7 @@ Recall: 0.5972
                     sFID: 5.080167488732627
                     Precision: 0.78958
                     Recall: 0.5728
+            
             
 
 
