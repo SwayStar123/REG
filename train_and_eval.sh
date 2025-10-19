@@ -1,6 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
-EXP_NAME="xl1-reg-invae-tread-delayed"
+EXP_NAME="xl1-reg-invae-tread-swiglu"
 STEP="0100000"
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
@@ -20,7 +20,6 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --data-dir="dataset" \
     --max-train-steps=${STEP} \
     --resume-step=90000
-
 
 SAVE_PATH="exps/${EXP_NAME}"
 NUM_STEP=250

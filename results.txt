@@ -35,6 +35,22 @@ Recall: 0.5972
             Precision: 0.83196
             Recall: 0.5185
 
+            with finetuning:
+                Inception Score: 154.89649963378906
+                FID: 4.756767133259984
+                sFID: 4.900602898842067
+                Precision: 0.78568
+                Recall: 0.572
+
+                with SwiGLU:
+                    Inception Score: 163.1488800048828
+                    FID: 4.343072845451729
+                    sFID: 5.080167488732627
+                    Precision: 0.78958
+                    Recall: 0.5728
+            
+
+
 
 
     with TREAD_official # Partially align only the remaining tokens for repa

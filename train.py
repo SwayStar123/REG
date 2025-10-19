@@ -268,8 +268,8 @@ def main(args):
     for epoch in range(args.epochs):
         model.train()
         for raw_image, x, y in train_dataloader:
-            if global_step == (args.max_train_steps - 10000): # Finetune tread to without routing for last 10k steps
-                model.module.tread_selection_rate = 0.0
+            # if global_step == (args.max_train_steps - 10000): # Finetune tread to without routing for last 10k steps
+            #     model.module.tread_selection_rate = 0.0
 
             raw_image = raw_image.to(device)
             x = x.squeeze(dim=1).to(device)
