@@ -51,7 +51,7 @@ def build_and_push(data_dir: str, repo_id: str, private: bool, max_shard_size: s
         lambda: customdataset_generator(data_dir, batch_size=batch_size, num_workers=num_workers),
     )
 
-    ds.push_to_hub(repo_id, private=private, max_shard_size=max_shard_size)
+    ds.push_to_hub(repo_id, split="invae", private=private, max_shard_size=max_shard_size)
 
 
 def parse_args():

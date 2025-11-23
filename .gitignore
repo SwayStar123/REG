@@ -5,3 +5,4 @@ __pycache__
 exps
 evaluations/VIRTUAL_imagenet256_labeled.npz
 wandb
+vae-in.zip

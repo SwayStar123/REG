@@ -135,13 +135,26 @@ def main(args):
     latent_size = args.resolution // 16  # invae uses 16x downsampling
 
     if args.enc_type != None:
+        # Only main process triggers the heavy I/O / download once
+        if accelerator.is_main_process:
+            _ = load_encoders(args.enc_type, device, args.resolution)
+
+        # Make all processes wait until rank 0 is done
+        accelerator.wait_for_everyone()
+
+        # Now everyone can safely load from cache (or do whatever)
         encoders, encoder_types, architectures = load_encoders(
             args.enc_type, device, args.resolution
-            )
+        )
     else:
         raise NotImplementedError()
 
     # Load custom invae model
+    if accelerator.is_main_process:
+        _ = load_invae(args.vae_name, device=device)
+
+    # Make all processes wait until rank 0 is done
+    accelerator.wait_for_everyone()
     vae = load_invae(args.vae_name, device=device)
     vae.eval().requires_grad_(False)
     channels = 32  # invae uses 32 channels
