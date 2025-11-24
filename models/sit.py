@@ -4,8 +4,10 @@
 # References:
 # GLIDE: https://github.com/openai/glide-text2im
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
+# SPRINT: SPRINT: Sparse-Dense Residual Fusion for Efficient Diffusion Transformers
 # --------------------------------------------------------
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
@@ -15,19 +17,19 @@ from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
-                nn.Linear(hidden_size, projector_dim),
-                nn.SiLU(),
-                nn.Linear(projector_dim, projector_dim),
-                nn.SiLU(),
-                nn.Linear(projector_dim, z_dim),
-            )
+        nn.Linear(hidden_size, projector_dim),
+        nn.SiLU(),
+        nn.Linear(projector_dim, projector_dim),
+        nn.SiLU(),
+        nn.Linear(projector_dim, z_dim),
+    )
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
-#################################################################################            
+#################################################################################
 class TimestepEmbedder(nn.Module):
     """
     Embeds scalar timesteps into vector representations.
@@ -40,13 +42,13 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
         self.frequency_embedding_size = frequency_embedding_size
-    
+
     @staticmethod
     def positional_embedding(t, dim, max_period=10000):
         """
         Create sinusoidal timestep embeddings.
         :param t: a 1-D Tensor of N indices, one per batch element.
-                          These may be fractional.
+                  These may be fractional.
         :param dim: the dimension of the output.
         :param max_period: controls the minimum frequency of the embeddings.
         :return: an (N, D) Tensor of positional embeddings.
@@ -102,7 +104,6 @@ class LabelEmbedder(nn.Module):
 #################################################################################
 #                                 Core SiT Model                                #
 #################################################################################
-
 class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
@@ -165,7 +166,7 @@ class FinalLayer(nn.Module):
 
 class SiT(nn.Module):
     """
-    Diffusion model with a Transformer backbone.
+    Diffusion model with a Transformer backbone + SPRINT sparse-dense residual fusion.
     """
     def __init__(
         self,
@@ -197,6 +198,27 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
+        self.depth = depth
+
+        # ----------------- SPRINT configuration -----------------
+        # fθ / gθ / hθ split: default 2 / (D-4) / 2 as in the paper.
+        self.num_f = 2
+        self.num_h = 2
+        self.num_g = self.depth - self.num_f - self.num_h
+        assert self.num_g >= 0, "depth too small for SPRINT split"
+
+        # Token drop ratio r (fraction of tokens to drop in sparse path)
+        self.sprint_drop_ratio = 0.75
+
+        # Path-drop learning probability p (drop whole sparse path during training)
+        self.path_drop_prob = 0.10
+
+        # [MASK] token for padding dropped positions
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
+
+        # Fusion projection: concat(ft, g_pad) → fused hidden
+        self.fusion_proj = nn.Linear(2 * hidden_size, hidden_size, bias=True)
+        # --------------------------------------------------------
 
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
@@ -278,41 +300,147 @@ class SiT(nn.Module):
         x = torch.einsum('nhwpqc->nchpwq', x)
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
-    
-    def forward(self, x, t, y, return_logvar=False, cls_token=None):
+
+    # --------------------------- SPRINT helpers ---------------------------
+    def _drop_tokens(self, x, drop_ratio):
         """
-        Forward pass of SiT.
+        Randomly drop a fraction of tokens (except we ensure at least one token kept).
+
+        x: (B, T, C)
+        drop_ratio: fraction of tokens to drop (0.0 ~ 1.0)
+        Returns:
+            x_keep: (B, T_keep, C)
+            ids_keep: (B, T_keep) indices into original T, or None if no drop.
+        """
+        if drop_ratio <= 0.0:
+            return x, None
+
+        B, T, C = x.shape
+        if T <= 1:
+            return x, None
+
+        num_keep = max(1, int(T * (1.0 - drop_ratio)))
+        if num_keep >= T:
+            return x, None
+
+        device = x.device
+        noise = torch.rand(B, T, device=device)
+        ids_shuffle = torch.argsort(noise, dim=1)
+        ids_keep = ids_shuffle[:, :num_keep]  # (B, T_keep)
+        x_keep = x.gather(1, ids_keep.unsqueeze(-1).expand(-1, -1, C))
+        return x_keep, ids_keep
+
+    def _pad_with_mask(self, x_sparse, ids_keep, T_full):
+        """
+        x_sparse: (B, T_keep, C)
+        ids_keep: (B, T_keep)
+        T_full: full sequence length T
+        Returns:
+            x_pad: (B, T_full, C) with [MASK] at dropped positions.
+        """
+        if ids_keep is None:
+            return x_sparse
+
+        B, T_keep, C = x_sparse.shape
+        assert T_full >= T_keep
+        x_pad = self.mask_token.expand(B, T_full, C).clone()
+        x_pad.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, C), x_sparse)
+        return x_pad
+
+    def _sprint_fuse(self, f_dense, g_full):
+        """
+        f_dense: (B, T, C) encoder output ft
+        g_full: (B, T, C) padded sparse output g_pad
+        Returns fused h: (B, T, C)
+        """
+        h = torch.cat([f_dense, g_full], dim=-1)  # (B, T, 2C)
+        h = self.fusion_proj(h)
+        return h
+
+    # ---------------------------------------------------------------------
+    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None):
+        """
+        Forward pass of SiT with SPRINT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
 
-        #cat with cls_token
-        x = self.x_embedder(x)   # (N, T, D), where T = H * W / patch_size ** 2
+        # Patch embedding
+        x = self.x_embedder(x)  # (N, T, D), where T = H * W / patch_size ** 2
+
+        # cls_token is expected (for your current pipeline)
         if cls_token is not None:
             cls_token = self.cls_projectors2(cls_token)
             cls_token = self.wg_norm(cls_token)
-            cls_token = cls_token.unsqueeze(1)  # [b, length, d]
+            cls_token = cls_token.unsqueeze(1)  # [B, 1, D]
             x = torch.cat((cls_token, x), dim=1)
             x = x + self.pos_embed
         else:
+            # If you want to support no-cls mode, remove this exit and adjust pos_embed.
             exit()
+
         N, T, D = x.shape
 
         # timestep and class embedding
-        t_embed = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
+        t_embed = self.t_embedder(t)  # (N, D)
+        y = self.y_embedder(y, self.training)  # (N, D)
         c = t_embed + y
 
-        for i, block in enumerate(self.blocks):
-            x = block(x, c)
-            if (i + 1) == self.encoder_depth:
-                zs = [projector(x.reshape(-1, D)).reshape(N, T, -1) for projector in self.projectors]
+        # ------------------------------------------------------------------
+        # 1) Encoder fθ on all tokens (dense, shallow)
+        # ------------------------------------------------------------------
+        x_enc = x
+        for i in range(self.num_f):
+            x_enc = self.blocks[i](x_enc, c)  # (N, T, D)
 
-        x, cls_token = self.final_layer(x, c, cls=cls_token)
-        x = self.unpatchify(x)
+        # Use encoder output for z-projections (REPA / SPRINT z_t)
+        zs = [
+            projector(x_enc.reshape(-1, D)).reshape(N, -1, z_dim)
+            for projector, z_dim in zip(self.projectors, self.z_dims)
+        ]
 
-        return x, zs, cls_token
+        # ------------------------------------------------------------------
+        # 2) Drop tokens to build sparse input to gθ (SPRINT sparse path)
+        # ------------------------------------------------------------------
+        x_sparse, ids_keep = self._drop_tokens(x_enc, self.sprint_drop_ratio)
+
+        # ------------------------------------------------------------------
+        # 3) Middle blocks gθ on sparse tokens
+        # ------------------------------------------------------------------
+        x_mid = x_sparse
+        for i in range(self.num_f, self.num_f + self.num_g):
+            x_mid = self.blocks[i](x_mid, c)  # (N, T_keep, D)
+
+        # ------------------------------------------------------------------
+        # 4) Pad back to full length with [MASK] to get g_pad
+        # ------------------------------------------------------------------
+        g_pad = self._pad_with_mask(x_mid, ids_keep, T_full=T)
+
+        # ------------------------------------------------------------------
+        # 5) Path-drop learning: sometimes drop whole sparse path (training only)
+        # ------------------------------------------------------------------
+        if self.training and self.path_drop_prob > 0.0:
+            if torch.rand(1, device=x.device) < self.path_drop_prob:
+                g_pad = self.mask_token.expand_as(g_pad)
+
+        # ------------------------------------------------------------------
+        # 6) Sparse–dense residual fusion: h_in = Fusion(ft, g_pad)
+        # ------------------------------------------------------------------
+        h_in = self._sprint_fuse(x_enc, g_pad)  # (N, T, D)
+
+        # ------------------------------------------------------------------
+        # 7) Decoder hθ on fused representation
+        # ------------------------------------------------------------------
+        x_dec = h_in
+        for i in range(self.num_f + self.num_g, self.depth):
+            x_dec = self.blocks[i](x_dec, c)
+
+        x_out, cls_token_out = self.final_layer(x_dec, c, cls=cls_token)
+        x_out = self.unpatchify(x_out)
+
+        # ids_keep lets you inspect which tokens were kept; ignore it if you don't need it.
+        return x_out, zs, cls_token_out, ids_keep
 
 
 #################################################################################
@@ -368,7 +496,6 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
-
 
 #################################################################################
 #                                   SiT Configs                                  #
