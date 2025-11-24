@@ -1,13 +1,15 @@
-XL/2 @ 100k 2.99 it/s
+XL/1 @ 100k 2.99 it/s
 Inception Score: 122.14485168457031                                                                                                                                                                                           
 FID: 7.156954631595056                                                                                                                                                                                                        
 sFID: 4.976955193591721                                                                                                                                                                                                       
 Precision: 0.75316                                                                                                                                                                                                            
 Recall: 0.5972
 
-XL/2 @ 400k 2.99 it/s
+XL/1 @ 400k 2.99 it/s
 Inception Score: 178.141357421875
 FID: 2.996033075112507
 sFID: 4.411010295598999
 Precision: 0.76946
 Recall: 0.6317
+
+B/1 @ 100k - 14-16 it/s
