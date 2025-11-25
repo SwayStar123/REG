@@ -211,7 +211,7 @@ class SiT(nn.Module):
         self.sprint_drop_ratio = 0.75
 
         # Path-drop learning probability p (drop whole sparse path during training)
-        self.path_drop_prob = 0.10
+        self.path_drop_prob = 0.05
 
         # [MASK] token for padding dropped positions
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
@@ -403,7 +403,11 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         # 2) Drop tokens to build sparse input to gθ (SPRINT sparse path)
         # ------------------------------------------------------------------
-        x_sparse, ids_keep = self._drop_tokens(x_enc, self.sprint_drop_ratio)
+        if self.training:
+            x_sparse, ids_keep = self._drop_tokens(x_enc, self.sprint_drop_ratio)
+        else:
+            x_sparse = x_enc
+            ids_keep = None
 
         # ------------------------------------------------------------------
         # 3) Middle blocks gθ on sparse tokens
@@ -421,8 +425,13 @@ class SiT(nn.Module):
         # 5) Path-drop learning: sometimes drop whole sparse path (training only)
         # ------------------------------------------------------------------
         if self.training and self.path_drop_prob > 0.0:
-            if torch.rand(1, device=x.device) < self.path_drop_prob:
-                g_pad = self.mask_token.expand_as(g_pad)
+            # Sync random decision across all ranks
+            drop_path = torch.rand(1, device=x.device)
+            if torch.distributed.is_initialized():
+                torch.distributed.broadcast(drop_path, src=0)
+            if drop_path.item() < self.path_drop_prob:
+                # Keep gradient flow but zero out the contribution
+                g_pad = g_pad * 0.0 + self.mask_token.expand_as(g_pad)
 
         # ------------------------------------------------------------------
         # 6) Sparse–dense residual fusion: h_in = Fusion(ft, g_pad)

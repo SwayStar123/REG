@@ -1,3 +1,4 @@
+
 import argparse
 import os
 from typing import Dict, Iterator
@@ -51,14 +52,14 @@ def build_and_push(data_dir: str, repo_id: str, private: bool, max_shard_size: s
         lambda: customdataset_generator(data_dir, batch_size=batch_size, num_workers=num_workers),
     )
 
-    ds.push_to_hub(repo_id, split="invae", private=private, max_shard_size=max_shard_size)
+    ds.push_to_hub(repo_id, private=private, max_shard_size=max_shard_size)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build and push HF dataset for REPA Imagenet-256")
     parser.add_argument("--data-dir", type=str, required=True,
                         help="Root directory containing 'images' and 'vae-sd' subfolders")
-    parser.add_argument("--repo-id", type=str, default="SwayStar123/repa-imagenet-256")
+    parser.add_argument("--repo-id", type=str, default="SwayStar123/repa-imagenet-256-invae")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--max-shard-size", type=str, default="10GB")
     parser.add_argument("--batch-size", type=int, default=512)
