@@ -1,3 +1,6 @@
+sleep $((8 * 60 * 60))
+
+
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
 
