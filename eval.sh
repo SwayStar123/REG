@@ -1,16 +1,16 @@
-
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0100000"
-SAVE_PATH="exps/xl1-reg-invae"
+STEP="0400000"
+SAVE_PATH="exps/b1-reg-invae"
 NUM_STEP=250
-MODEL_SIZE='XL'
+MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
 PATCH_SIZE=1
 
 export NCCL_P2P_DISABLE=1
+export LD_LIBRARY_PATH=/home/sky/miniconda3/lib/python3.10/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 
 python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
   --model SiT-${MODEL_SIZE}/${PATCH_SIZE} \
@@ -38,14 +38,3 @@ python ./evaluations/evaluator.py \
     --cfg ${CFG_SCALE} \
     --cls_cfg ${CLS_CFG_SCALE} \
     --gh ${GH}
-
-
-
-
-
-
-
-
-
-
-
