@@ -17,4 +17,5 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --exp-name="b1-reg-invae-sprint-swiglu" \
     --batch-size=256 \
     --data-dir="dataset" \
-    --cls=0.03
+    --cls=0.03 \
+    --resume-step=50000
