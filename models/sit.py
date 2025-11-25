@@ -13,7 +13,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
-
+from xformers.ops import SwiGLU
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -119,9 +119,7 @@ class SiTBlock(nn.Module):
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
-            )
+        self.mlp = SwiGLU(hidden_size, int(2/3 * mlp_hidden_dim))
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
