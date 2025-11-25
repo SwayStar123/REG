@@ -12,20 +12,20 @@ PATCH_SIZE=1
 export NCCL_P2P_DISABLE=1
 export LD_LIBRARY_PATH=/home/sky/miniconda3/lib/python3.10/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 
-# python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
-#   --model SiT-${MODEL_SIZE}/${PATCH_SIZE} \
-#   --num-fid-samples 50000 \
-#   --ckpt ${SAVE_PATH}/checkpoints/${STEP}.pt \
-#   --path-type=linear \
-#   --projector-embed-dims=768 \
-#   --per-proc-batch-size=64 \
-#   --mode=sde \
-#   --num-steps=${NUM_STEP} \
-#   --cfg-scale=${CFG_SCALE} \
-#   --cls-cfg-scale=${CLS_CFG_SCALE} \
-#   --guidance-high=${GH} \
-#   --sample-dir ${SAVE_PATH}/checkpoints \
-#   --cls=768 \
+python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
+  --model SiT-${MODEL_SIZE}/${PATCH_SIZE} \
+  --num-fid-samples 50000 \
+  --ckpt ${SAVE_PATH}/checkpoints/${STEP}.pt \
+  --path-type=linear \
+  --projector-embed-dims=768 \
+  --per-proc-batch-size=64 \
+  --mode=sde \
+  --num-steps=${NUM_STEP} \
+  --cfg-scale=${CFG_SCALE} \
+  --cls-cfg-scale=${CLS_CFG_SCALE} \
+  --guidance-high=${GH} \
+  --sample-dir ${SAVE_PATH}/checkpoints \
+  --cls=768 \
 
 
 python ./evaluations/evaluator.py \
