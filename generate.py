@@ -82,7 +82,7 @@ def main(args):
         assert int(args.projector_embed_dims.split(',')[0]) == 768
         state_dict = download_model('last.pt')
     else:
-        state_dict = torch.load(ckpt_path, map_location=f'cuda:{device}')['ema']
+        state_dict = torch.load(ckpt_path, map_location=f'cuda:{device}', weights_only=False)['ema']
 
     if args.legacy:
         state_dict = load_legacy_checkpoints(
