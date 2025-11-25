@@ -1,3 +1,6 @@
+sleep $((6 * 60 * 60))
+
+
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
 
@@ -14,7 +17,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae" \
+    --exp-name="b1-reg-invae-sprint" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03

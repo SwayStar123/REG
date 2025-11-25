@@ -440,7 +440,7 @@ class SiT(nn.Module):
         x_out = self.unpatchify(x_out)
 
         # ids_keep lets you inspect which tokens were kept; ignore it if you don't need it.
-        return x_out, zs, cls_token_out, ids_keep
+        return x_out, zs, cls_token_out
 
 
 #################################################################################
