@@ -1,7 +1,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint"
+SAVE_PATH="exps/b1-reg-invae-sprint-swiglu"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
