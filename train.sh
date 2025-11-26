@@ -18,4 +18,4 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --resume-step=90000
+    --resume-step=100000
