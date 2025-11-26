@@ -19,9 +19,15 @@ B/1 @ 400k - 14-16 it/s
     Precision: 0.69074
     Recall: 0.6319
 
-    with SPRINT - also 14-16 it/s  (Seems bottlenecked by Dino) 10170 MB VRAM
+    kd_value: 0.5863104437365727 
+    kd_variance: 0.013315376861456042 
+
+    with SPRINT - also 14-16 it/s  (Seems bottlenecked by Dino) 10170 MB VRAM - 140M params
         Inception Score: 188.6656494140625
         FID: 4.582909041283983
         sFID: 7.035067147754262
         Precision: 0.76044
         Recall: 0.5617
+
+        kd_value: 0.3848956672438628 
+        kd_variance: 0.009257021037250976 
