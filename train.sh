@@ -1,6 +1,3 @@
-sleep $((8 * 60 * 60))
-
-
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
 
@@ -21,4 +18,4 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --resums
+    --resume-step=90000
