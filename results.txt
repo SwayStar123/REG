@@ -53,3 +53,11 @@ B/1 @ 400k - 14-16 it/s
             kd_variance: 0.00830815473242009
 
             with RoPE - 12 -13.5 it/s
+                Inception Score: 194.21014404296875
+                FID: 4.093295477349841
+                sFID: 6.22270653683654
+                Precision: 0.77758
+                Recall: 0.5631
+
+                kd_value: 0.36751934074190595
+                kd_variance: 0.00868638562874775
