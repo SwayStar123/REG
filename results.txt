@@ -61,3 +61,5 @@ B/1 @ 400k - 14-16 it/s
 
                 kd_value: 0.36751934074190595
                 kd_variance: 0.00868638562874775
+
+                with Prodigy optimizer - 9-10 it/s

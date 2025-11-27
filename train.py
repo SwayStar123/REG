@@ -21,6 +21,7 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from models.sit import SiT_models
 from loss import SILoss
 from utils import load_encoders
+from prodigy import Prodigy
 
 from dataset import CustomDataset
 from preprocessing.encoders import load_invae
@@ -196,12 +197,16 @@ def main(args):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    optimizer = torch.optim.AdamW(
+    optimizer = Prodigy(
         model.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
+        # Prodigy uses lr 1
+        lr=1.0,
+        betas=(args.prodigy_beta1, args.prodigy_beta2),
+        eps=args.prodigy_epsilon,
+        weight_decay=args.prodigy_weight_decay,
+        use_bias_correction=True,
+        safeguard_warmup=True,
+        slice_p=args.prodigy_slice_p,
     )    
     
     # Setup data:
@@ -437,11 +442,11 @@ def parse_args(input_args=None):
     parser.add_argument("--max-train-steps", type=int, default=400000)
     parser.add_argument("--checkpointing-steps", type=int, default=10000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--adam-beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam-beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam-weight-decay", type=float, default=0., help="Weight decay to use.")
-    parser.add_argument("--adam-epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
+    parser.add_argument("--prodigy-beta1", type=float, default=0.9, help="The beta1 parameter for the Prodigy optimizer.")
+    parser.add_argument("--prodigy-beta2", type=float, default=0.99, help="The beta2 parameter for the Prodigy optimizer.")
+    parser.add_argument("--prodigy-weight-decay", type=float, default=0.01, help="Weight decay to use with Prodigy.")
+    parser.add_argument("--prodigy-epsilon", type=float, default=1e-08, help="Epsilon value for the optimizer")
+    parser.add_argument("--prodigy-slice-p", type=int, default=11, help="Prodigy slice_p to trade off speed vs accuracy (11 is a common choice).")
     parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
 
     # seed
