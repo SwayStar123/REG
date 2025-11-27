@@ -9,6 +9,7 @@ import json
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from tqdm.auto import tqdm
@@ -22,6 +23,7 @@ from models.sit import SiT_models
 from loss import SILoss
 from utils import load_encoders
 from prodigy import Prodigy
+from dion import Dion
 
 from dataset import CustomDataset
 from preprocessing.encoders import load_invae
@@ -197,17 +199,46 @@ def main(args):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    optimizer = Prodigy(
-        model.parameters(),
-        # Prodigy uses lr 1
-        lr=1.0,
-        betas=(args.prodigy_beta1, args.prodigy_beta2),
-        eps=args.prodigy_epsilon,
-        weight_decay=args.prodigy_weight_decay,
-        use_bias_correction=True,
-        safeguard_warmup=True,
-        slice_p=args.prodigy_slice_p,
-    )    
+    if args.optimizer == "prodigy":
+        optimizer = Prodigy(
+            model.parameters(),
+            # Prodigy uses lr 1
+            lr=1.0,
+            betas=(args.prodigy_beta1, args.prodigy_beta2),
+            eps=args.prodigy_epsilon,
+            weight_decay=args.prodigy_weight_decay,
+            use_bias_correction=True,
+            safeguard_warmup=True,
+            slice_p=args.prodigy_slice_p,
+        )
+    elif args.optimizer == "dion":
+        matrix_params = []
+        scalar_params = []
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            pname = name.lower()
+            if p.ndim == 2 and ("embed" not in pname and "embedding" not in pname):
+                matrix_params.append(p)
+            else:
+                scalar_params.append(p)
+
+        param_groups = []
+        if len(matrix_params) > 0:
+            # Matrix weights use Dion with global weight decay
+            param_groups.append(dict(params=matrix_params))
+        if len(scalar_params) > 0:
+            # Biases, norms, embeddings, etc. use a scalar optimizer with no weight decay
+            param_groups.append(dict(params=scalar_params, algorithm="lion", weight_decay=0.0))
+
+        optimizer = Dion(
+            param_groups,
+            lr=args.dion_lr,
+            weight_decay=args.dion_weight_decay,
+            rank_fraction=args.dion_rank_fraction,
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
     
     # Setup data:
     train_dataset = CustomDataset(args.data_dir)
@@ -442,11 +473,15 @@ def parse_args(input_args=None):
     parser.add_argument("--max-train-steps", type=int, default=400000)
     parser.add_argument("--checkpointing-steps", type=int, default=10000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--optimizer", type=str, default="prodigy", choices=["prodigy", "dion"])
     parser.add_argument("--prodigy-beta1", type=float, default=0.9, help="The beta1 parameter for the Prodigy optimizer.")
     parser.add_argument("--prodigy-beta2", type=float, default=0.99, help="The beta2 parameter for the Prodigy optimizer.")
     parser.add_argument("--prodigy-weight-decay", type=float, default=0.01, help="Weight decay to use with Prodigy.")
     parser.add_argument("--prodigy-epsilon", type=float, default=1e-08, help="Epsilon value for the optimizer")
     parser.add_argument("--prodigy-slice-p", type=int, default=11, help="Prodigy slice_p to trade off speed vs accuracy (11 is a common choice).")
+    parser.add_argument("--dion-lr", type=float, default=1e-4, help="Base learning rate for the Dion optimizer.")
+    parser.add_argument("--dion-weight-decay", type=float, default=0.1, help="Weight decay to use with Dion.")
+    parser.add_argument("--dion-rank-fraction", type=float, default=1.0, help="Rank fraction for Dion (1.0 = full rank updates).")
     parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
 
     # seed
