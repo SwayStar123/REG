@@ -2,3 +2,4 @@ tensorflow-gpu>=2.0
 scipy
 requests
 tqdm
+nvidia-cuda-nvcc-cu12==12.8.93

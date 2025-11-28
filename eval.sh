@@ -10,6 +10,9 @@ GH=1.0
 PATCH_SIZE=1
 
 export NCCL_P2P_DISABLE=1
+# export CUDA_HOME="$CONDA_PREFIX"
+# export PATH="$CUDA_HOME/bin:$PATH"
+# export XLA_FLAGS="--xla_gpu_cuda_data_dir=$CUDA_HOME"
 
 python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
   --model SiT-${MODEL_SIZE}/${PATCH_SIZE} \
