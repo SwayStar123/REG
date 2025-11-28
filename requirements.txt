@@ -131,3 +131,4 @@ xxhash==3.5.0
 yacs==0.1.8
 yarl==1.20.0
 zipp==3.21.0
+nvidia-cuda-nvcc-cu12==12.8.93
