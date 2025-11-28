@@ -1,7 +1,6 @@
 NUM_GPUS=8
 random_number=$((RANDOM % 100 + 1200))
 
-
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --report-to="wandb" \
     --allow-tf32 \
@@ -14,8 +13,8 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-prodigy-slice1" \
+    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-muon-adam" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --prodigy-slice-p=1
+    --optimizer="muon"
