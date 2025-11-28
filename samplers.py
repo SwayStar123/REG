@@ -40,7 +40,8 @@ def model_out_to_velocity(model_out, xt, t, prediction="v"):
     elif prediction == "x":
         # v = (x_t - x_pred) / t  for your linear path
         t_expanded = expand_t_like_x(t, xt)
-        t_safe = t_expanded.clamp(min=1e-5)
+        # t_safe = t_expanded.clamp(min=1e-5)
+        t_safe = t_expanded
         return (xt - model_out) / t_safe
 
     else:

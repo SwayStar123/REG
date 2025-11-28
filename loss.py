@@ -104,9 +104,13 @@ class SILoss:
 
             model_input = alpha_t * images + sigma_t * noises
             cls_input = alpha_t.squeeze(-1).squeeze(-1) * cls_token + sigma_t.squeeze(-1).squeeze(-1) * noises_cls
-            if self.prediction == 'v' or self.prediction == "x":
+            if self.prediction == 'v':
                 model_target = d_alpha_t * images + d_sigma_t * noises
                 cls_target = d_alpha_t * cls_token + d_sigma_t * noises_cls
+            elif self.prediction == "x":
+                model_target = (model_input - images) / (sigma_t + 0.05)
+                cls_target = (cls_input - cls_token) / (sigma_t + 0.05)
+
             else:
                 raise NotImplementedError()
 
@@ -114,8 +118,8 @@ class SILoss:
                                                         cls_token=cls_input)
 
             if self.prediction == "x":
-                model_output = noises - model_output
-                cls_output = noises_cls - cls_output
+                model_output = (model_input - model_output) / (sigma_t + 0.05)
+                cls_output = (cls_input - cls_output) / (sigma_t + 0.05)
         
 
 
