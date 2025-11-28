@@ -12,24 +12,14 @@ def expand_t_like_x(t, x_cur):
     t = t.view(t.size(0), *dims)
     return t
 
-def get_score_from_velocity(vt, xt, t, path_type="linear"):
-    """Wrapper function: transfrom velocity prediction model to score
-    Args:
-        velocity: [batch_dim, ...] shaped tensor; velocity model output
-        x: [batch_dim, ...] shaped tensor; x_t data point
-        t: [batch_dim,] time tensor
-    """
+def get_score_from_velocity(vt, xt, t):
+    """vt: velocity prediction, xt: current x_t, t: [B]"""
     t = expand_t_like_x(t, xt)
-    if path_type == "linear":
-        alpha_t, d_alpha_t = 1 - t, torch.ones_like(xt, device=xt.device) * -1
-        sigma_t, d_sigma_t = t, torch.ones_like(xt, device=xt.device)
-    elif path_type == "cosine":
-        alpha_t = torch.cos(t * np.pi / 2)
-        sigma_t = torch.sin(t * np.pi / 2)
-        d_alpha_t = -np.pi / 2 * torch.sin(t * np.pi / 2)
-        d_sigma_t =  np.pi / 2 * torch.cos(t * np.pi / 2)
-    else:
-        raise NotImplementedError
+
+    alpha_t = 1 - t
+    sigma_t = t
+    d_alpha_t = -torch.ones_like(xt, device=xt.device)
+    d_sigma_t = torch.ones_like(xt, device=xt.device)
 
     mean = xt
     reverse_alpha_ratio = alpha_t / d_alpha_t
@@ -37,6 +27,24 @@ def get_score_from_velocity(vt, xt, t, path_type="linear"):
     score = (reverse_alpha_ratio * vt - mean) / var
 
     return score
+
+def model_out_to_velocity(model_out, xt, t, prediction="v"):
+    """
+    model_out: raw output of the network (v or x depending on prediction)
+    xt: current x_t
+    t: [batch] time tensor (before expand)
+    """
+    if prediction == "v":
+        return model_out
+
+    elif prediction == "x":
+        # v = (x_t - x_pred) / t  for your linear path
+        t_expanded = expand_t_like_x(t, xt)
+        t_safe = t_expanded.clamp(min=1e-5)
+        return (xt - model_out) / t_safe
+
+    else:
+        raise NotImplementedError(f"Unknown prediction mode: {prediction}")
 
 
 def compute_diffusion(t_cur):
@@ -52,7 +60,7 @@ def euler_maruyama_sampler(
         cfg_scale=1.0,
         guidance_low=0.0,
         guidance_high=1.0,
-        path_type="linear",
+        prediction="v",
         cls_latents=None,
         args=None
         ):
@@ -98,13 +106,16 @@ def euler_maruyama_sampler(
             v_cur, _, cls_v_cur = model(
                 model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
                 )
+            # convert raw model outputs to velocities depending on prediction type
+            v_cur = model_out_to_velocity(v_cur, model_input, time_input, prediction=prediction)
+            cls_v_cur = model_out_to_velocity(cls_v_cur, cls_model_input, time_input, prediction=prediction)
             v_cur = v_cur.to(torch.float64)
             cls_v_cur = cls_v_cur.to(torch.float64)
 
-            s_cur = get_score_from_velocity(v_cur, model_input, time_input, path_type=path_type)
+            s_cur = get_score_from_velocity(v_cur, model_input, time_input)
             d_cur = v_cur - 0.5 * diffusion * s_cur
 
-            cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input, path_type=path_type)
+            cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input)
             cls_d_cur = cls_v_cur - 0.5 * diffusion * cls_s_cur
 
             if cfg_scale > 1. and t_cur <= guidance_high and t_cur >= guidance_low:
@@ -142,12 +153,15 @@ def euler_maruyama_sampler(
     v_cur, _, cls_v_cur = model(
         model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
         )
+    # convert raw model outputs to velocities depending on prediction type
+    v_cur = model_out_to_velocity(v_cur, model_input, time_input, prediction=prediction)
+    cls_v_cur = model_out_to_velocity(cls_v_cur, cls_model_input, time_input, prediction=prediction)
     v_cur = v_cur.to(torch.float64)
     cls_v_cur = cls_v_cur.to(torch.float64)
 
 
-    s_cur = get_score_from_velocity(v_cur, model_input, time_input, path_type=path_type)
-    cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input, path_type=path_type)
+    s_cur = get_score_from_velocity(v_cur, model_input, time_input)
+    cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input)
 
     diffusion = compute_diffusion(t_cur)
     d_cur = v_cur - 0.5 * diffusion * s_cur

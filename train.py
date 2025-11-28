@@ -183,10 +183,12 @@ def main(args):
     # create loss function
     loss_fn = SILoss(
         prediction=args.prediction,
-        path_type=args.path_type, 
         encoders=encoders,
         accelerator=accelerator,
-        weighting=args.weighting
+        weighting=args.weighting,
+        c_type=getattr(args, "eqm_c_type", "truncated"),
+        a=getattr(args, "eqm_a", 0.8),
+        lambd=getattr(args, "eqm_lambda", 4.0),
     )
     if accelerator.is_main_process:
         logger.info(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -348,20 +350,35 @@ def main(args):
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
             if (global_step == 1 or (global_step % args.sampling_steps == 0 and global_step > 0)):
-                sampling_kwargs = dict(
+                if args.prediction == "gradient":
+                    from samplers_eqm import eqm_gradient_descent_sampler
+                    samples = eqm_gradient_descent_sampler(
                         model=ema,
                         latents=xT.clone(),
                         y=ys.clone(),
                         num_steps=args.num_sample_steps,
-                        heun=False,
+                        step_size=args.eqm_step_size,
                         cfg_scale=args.cfg_scale,
-                        guidance_low=args.guidance_low,
-                        guidance_high=args.guidance_high,
-                        path_type=args.path_type,
                         cls_latents=cls_z.clone(),
                         args=args,
-                    )
-                samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+                        use_nag=args.use_nag,
+                        nag_momentum=args.nag_momentum,
+                    ).to(torch.float32)
+                else:
+                    sampling_kwargs = dict(
+                            model=ema,
+                            latents=xT.clone(),
+                            y=ys.clone(),
+                            num_steps=args.num_sample_steps,
+                            heun=False,
+                            cfg_scale=args.cfg_scale,
+                            guidance_low=args.guidance_low,
+                            guidance_high=args.guidance_high,
+                            prediction=args.prediction,
+                            cls_latents=cls_z.clone(),
+                            args=args,
+                        )
+                    samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
 
                 samples = vae.decode((samples - latents_bias) / latents_scale).sample
 
@@ -451,12 +468,17 @@ def parse_args(input_args=None):
     parser.add_argument("--num-workers", type=int, default=4)
 
     # loss
-    parser.add_argument("--path-type", type=str, default="linear", choices=["linear", "cosine"])
-    parser.add_argument("--prediction", type=str, default="v", choices=["v"]) # currently we only support v-prediction
+    parser.add_argument("--prediction", type=str, default="v", choices=["v", "x", "gradient"]) # loss is calculated with velocity for v and x
     parser.add_argument("--cfg-prob", type=float, default=0.1)
     parser.add_argument("--enc-type", type=str, default='dinov2-vit-b')
     parser.add_argument("--proj-coeff", type=float, default=0.5)
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
+    parser.add_argument("--eqm-c-type", type=str, default="truncated", choices=["linear", "truncated", "piecewise", "constant"])
+    parser.add_argument("--eqm-a", type=float, default=0.8)
+    parser.add_argument("--eqm-lambda", type=float, default=4.0)
+    parser.add_argument("--eqm-step-size", type=float, default=0.003)
+    parser.add_argument("--use-nag", action="store_true", default=False)
+    parser.add_argument("--nag-momentum", type=float, default=0.35)
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
 
