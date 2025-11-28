@@ -18,6 +18,25 @@ import torch.nn.functional as F
 
 from models.pos_embed import VisionRotaryEmbeddingFast
 
+class SquaredReLU(nn.Module):
+    def forward(self, x):
+        # (ReLU(x))^2
+        return torch.relu(x).pow(2)
+
+
+class LopsidedLeakyReLU(nn.Module):
+    """
+    f(x) = x^2      if x > 0
+           α * x    if x <= 0
+    """
+    def __init__(self, negative_slope: float = 0.01):
+        super().__init__()
+        self.negative_slope = negative_slope
+
+    def forward(self, x):
+        return torch.where(x > 0, x * x, self.negative_slope * x)
+
+
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
         nn.Linear(hidden_size, projector_dim),
@@ -189,9 +208,19 @@ class SiTBlock(nn.Module):
             self.attn.fused_attn = block_kwargs["fused_attn"]
         self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        
+        
+
+        activation_name = block_kwargs.get("activation_fn", "gelu").lower()
+        if activation_name == "gelu":
+            activation_fn = lambda: nn.GELU(approximate="tanh")
+        elif activation_name == "relu2":
+            activation_fn = lambda: SquaredReLU()
+        elif activation_name == "lopsided_leaky_relu2":
+            activation_fn = lambda: LopsidedLeakyReLU(negative_slope=0.01)
+            
         self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
+            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=activation_fn, drop=0
         )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),

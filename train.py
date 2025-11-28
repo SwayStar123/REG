@@ -165,7 +165,7 @@ def main(args):
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
     z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
-    block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
+    block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm, "activation_fn": args.activation_fn}
     model = SiT_models[args.model](
         input_size=latent_size,
         in_channels=channels,
@@ -421,6 +421,7 @@ def parse_args(input_args=None):
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
+    parser.add_argument("--activation-fn", type=str, default="gelu", choices=["gelu", "relu2", "lopsided_leaky_relu2"])
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
