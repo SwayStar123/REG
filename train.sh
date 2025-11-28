@@ -14,7 +14,8 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rmsnorm-rope" \
+    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm" \
     --batch-size=256 \
     --data-dir="dataset" \
-    --cls=0.03
+    --cls=0.03 \
+    --qk-norm
