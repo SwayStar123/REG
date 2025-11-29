@@ -36,6 +36,56 @@ class LopsidedLeakyReLU(nn.Module):
     def forward(self, x):
         return torch.where(x > 0, x * x, self.negative_slope * x)
 
+class xIELU(nn.Module):
+    def __init__(self, alpha_p_init=0.8, alpha_n_init=0.8, beta=0.5, eps=-1e-6):
+        super().__init__()
+        self.beta = beta
+        self.eps = eps
+
+        # store unconstrained params; softplus enforces alpha_p > 0, alpha_n > beta
+        self.alpha_p = nn.Parameter(torch.log(torch.exp(torch.tensor(alpha_p_init)) - 1))
+        self.alpha_n = nn.Parameter(
+            torch.log(torch.exp(torch.tensor(alpha_n_init - beta)) - 1)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        alpha_p = F.softplus(self.alpha_p)
+        alpha_n = self.beta + F.softplus(self.alpha_n)
+
+        pos = alpha_p * x * x + self.beta * x
+        # clamp x for numerical stability near 0 on the negative side
+        x_neg = torch.minimum(x, torch.tensor(self.eps, dtype=x.dtype, device=x.device))
+        neg = alpha_n * torch.expm1(x_neg) - alpha_n * x + self.beta * x
+
+        return torch.where(x > 0, pos, neg)
+
+class m3(nn.Module):
+    '''
+    m3(x):
+        x<=s: a_n * ReLU(-(x-s))^p_n + b
+        x>s: a_p * ReLU(x-s)^p_p + b
+    a_n is learnable
+    a_p is learnable
+    p_n is learnable
+    p_p is learnable
+    s is learnable
+    b is learnable
+    a_n has to be positive
+    a_p has to be positive
+    p_n has to be 1 or greater
+    p_p has to be 1 or greater
+    '''
+    def __init__(self, a_n=1e-7, a_p=1.0, p_n=1e-7, p_p=1.0, s=0.0, b=0.0):
+        super(m3, self).__init__()
+        self.a_n = nn.Parameter(torch.tensor(math.log(math.exp(a_n) - 1.0), dtype=torch.float32))
+        self.a_p = nn.Parameter(torch.tensor(math.log(math.exp(a_p) - 1.0), dtype=torch.float32))
+        self.p_n = nn.Parameter(torch.tensor(math.log(math.exp(p_n) - 1.0), dtype=torch.float32))
+        self.p_p = nn.Parameter(torch.tensor(math.log(math.exp(p_p) - 1.0), dtype=torch.float32))
+        self.s = nn.Parameter(torch.tensor(s, dtype=torch.float32))
+        self.b = nn.Parameter(torch.tensor(b, dtype=torch.float32))
+    def forward(self, x):
+        return self.a_n * torch.pow(F.relu(-(x-self.s)), 1.0 + F.softplus(self.p_n)) + F.softplus(self.a_p) * torch.pow(F.relu(x-self.s), 1.0 + F.softplus(self.p_p)) + self.b
+
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -218,6 +268,10 @@ class SiTBlock(nn.Module):
             activation_fn = lambda: SquaredReLU()
         elif activation_name == "lopsided_leaky_relu2":
             activation_fn = lambda: LopsidedLeakyReLU(negative_slope=0.01)
+        elif activation_name == "xielu":
+            activation_fn = lambda: xIELU()
+        elif activation_name == "m3":
+            activation_fn = lambda: m3()
             
         self.mlp = Mlp(
             in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=activation_fn, drop=0

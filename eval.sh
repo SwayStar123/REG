@@ -1,14 +1,14 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2"
+SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-xielu"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
 PATCH_SIZE=1
-ACTIVATION_FN="relu2"
+ACTIVATION_FN="xielu"
 
 export NCCL_P2P_DISABLE=1
 

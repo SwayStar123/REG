@@ -81,3 +81,13 @@ B/1 @ 400k - 14-16 it/s
 
                         kd_value: 0.35136
                         kd_variance: 0.00765
+
+                    with Lopsided Leaky RELU^2:
+                        Inception Score: 189.43191528320312
+                        FID: 4.1148487111908025
+                        sFID: 6.671849648662146
+                        Precision: 0.76804
+                        Recall: 0.569
+
+                        kd_value: 0.36604
+                        kd_variance: 0.00756

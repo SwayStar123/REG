@@ -13,12 +13,13 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2" \
+    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-xielu" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
-    --activation-fn="relu2"
+    --activation-fn="xielu" \
+    --resume-step=50000
 
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
@@ -33,10 +34,9 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-llrelu2" \
+    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-m3" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
-    --activation-fn="lopsided_leaky_relu2"
-
+    --activation-fn="m3" \

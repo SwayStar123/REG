@@ -421,7 +421,7 @@ def parse_args(input_args=None):
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
-    parser.add_argument("--activation-fn", type=str, default="gelu", choices=["gelu", "relu2", "lopsided_leaky_relu2"])
+    parser.add_argument("--activation-fn", type=str, default="gelu", choices=["gelu", "relu2", "lopsided_leaky_relu2", "xielu", "m3"])
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
