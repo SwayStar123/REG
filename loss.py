@@ -14,6 +14,14 @@ def sum_flat(x):
     """
     return torch.sum(x, dim=list(range(1, len(x.size()))))
 
+def _drop_cls(x):  # x: [B, T, D], drop token 0
+    return x[:, 1:, :]
+
+def _autocorr(tokens_no_cls: torch.Tensor) -> torch.Tensor:
+    # tokens_no_cls: [B, N, D]; cosine autocorr A(H) = Hn Hn^T
+    Hn = F.normalize(tokens_no_cls, dim=-1)
+    return torch.einsum('bid,bjd->bij', Hn, Hn)  # [B, N, N]
+
 class SILoss:
     def __init__(
             self,
@@ -95,4 +103,14 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+        # structural autocorrelation alignment, exclude CLS
+        struc_loss = 0.0
+        for z, z_tilde in zip(zs, zs_tilde):
+            z_nc = _drop_cls(z)            # [B,N,D]
+            h_nc = _drop_cls(z_tilde)
+            A_enc = _autocorr(z_nc)
+            A_den = _autocorr(h_nc)
+            struc_loss += ((A_enc - A_den) ** 2).mean()
+        struc_loss /= len(zs)
+
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, struc_loss
