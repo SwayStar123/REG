@@ -1,13 +1,14 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope"
+SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
 PATCH_SIZE=1
+ACTIVATION_FN="relu2"
 
 export NCCL_P2P_DISABLE=1
 
@@ -25,6 +26,8 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
+  --qk-norm \
+  --activation-fn=${ACTIVATION_FN} \
 
 
 python ./evaluations/evaluator.py \

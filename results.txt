@@ -61,3 +61,23 @@ B/1 @ 400k - 14-16 it/s
 
                 kd_value: 0.36751934074190595
                 kd_variance: 0.00868638562874775
+
+                with QK Norm
+                    Inception Score: 193.48756408691406
+                    FID: 4.019138690539364
+                    sFID: 6.184206727182641
+                    Precision: 0.78416
+                    Recall: 0.5634
+
+                    kd_value: 0.36407
+                    kd_variance: 0.00848
+
+                    with RELU^2:
+                        Inception Score: 198.41360473632812
+                        FID: 3.807236145347929
+                        sFID: 6.466709181560304
+                        Precision: 0.77766
+                        Recall: 0.5717
+
+                        kd_value: 0.35136
+                        kd_variance: 0.00765
