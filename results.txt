@@ -92,5 +92,14 @@ B/1 @ 400k - 14-16 it/s
                         kd_value: 0.36604
                         kd_variance: 0.00756
 
-                    with XIELU: 8-10 it/s
+                    with XIELU: 8-10 it/s:
+                        Inception Score: 191.36798095703125
+                        FID: 4.104583009888131
+                        sFID: 6.348043494391391
+                        Precision: 0.78336
+                        Recall: 0.5619
+
+                        kd_value: 0.35733
+                        kd_variance: 0.00752
                     with m3:
+                        stopped early because of significantly worse loss

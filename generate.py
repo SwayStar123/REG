@@ -196,7 +196,7 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--activation-fn", type=str, default="gelu", choices=["gelu", "relu2", "lopsided_leaky_relu2"])
+    parser.add_argument("--activation-fn", type=str, default="gelu", choices=["gelu", "relu2", "lopsided_leaky_relu2", "xielu", "m3"])
 
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)
