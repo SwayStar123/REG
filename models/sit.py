@@ -118,6 +118,7 @@ class Attention(nn.Module):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.RMSNorm,
+        use_v1_residual: bool = True,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -133,6 +134,10 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
+        if use_v1_residual:
+            self.v1_lambda = nn.Parameter(torch.tensor(0.5))
+        self.v_last = None
+
         # for API compatibility with timm Attention
         self.fused_attn = False
 
@@ -141,6 +146,7 @@ class Attention(nn.Module):
         x: torch.Tensor,
         rope: Optional[VisionRotaryEmbeddingFast] = None,
         rope_ids: Optional[torch.Tensor] = None,
+        v1: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Multi-head self-attention with optional 2D RoPE.
 
@@ -156,7 +162,11 @@ class Attention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )  # (3, B, H, N, Dh)
         q, k, v = qkv.unbind(0)
+        self.v_last = v
         q, k = self.q_norm(q), self.k_norm(k)
+
+        if v1 is not None:
+            v = self.v1_lambda * v1 + (1.0 - self.v1_lambda) * v
 
         if rope is not None:
             q = rope(q, rope_ids)
@@ -179,11 +189,15 @@ class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, use_v1_residual: bool = True, **block_kwargs):
         super().__init__()
         self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
-            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=block_kwargs["qk_norm"]
+            hidden_size,
+            num_heads=num_heads,
+            qkv_bias=True,
+            qk_norm=block_kwargs["qk_norm"],
+            use_v1_residual=use_v1_residual,
         )
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
@@ -204,6 +218,7 @@ class SiTBlock(nn.Module):
         c: torch.Tensor,
         feat_rope: Optional[VisionRotaryEmbeddingFast] = None,
         rope_ids: Optional[torch.Tensor] = None,
+        v1: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
@@ -212,6 +227,7 @@ class SiTBlock(nn.Module):
             modulate(self.norm1(x), shift_msa, scale_msa),
             rope=feat_rope,
             rope_ids=rope_ids,
+            v1=v1,
         )
         x = x + gate_mlp.unsqueeze(1) * self.mlp(
             modulate(self.norm2(x), shift_mlp, scale_mlp)
@@ -312,9 +328,19 @@ class SiT(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
-        self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
-        ])
+        blocks = []
+        for i in range(depth):
+            use_v1_residual = i > 0
+            blocks.append(
+                SiTBlock(
+                    hidden_size,
+                    num_heads,
+                    mlp_ratio=mlp_ratio,
+                    use_v1_residual=use_v1_residual,
+                    **block_kwargs,
+                )
+            )
+        self.blocks = nn.ModuleList(blocks)
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
             ])
@@ -494,8 +520,13 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         x_enc = x
         rope_ids_enc = rope_ids_full
+
+        v1_full = None
         for i in range(self.num_f):
-            x_enc = self.blocks[i](x_enc, c, self.feat_rope, rope_ids_enc)  # (N, T, D)
+            x_enc = self.blocks[i](x_enc, c, self.feat_rope, rope_ids_enc, v1=v1_full)  # (N, T, D)
+
+            if v1_full is None:
+                v1_full = self.blocks[i].attn.v_last
 
         # Use encoder output for z-projections (REPA / SPRINT z_t)
         zs = [
@@ -517,12 +548,20 @@ class SiT(nn.Module):
         else:
             rope_ids_sparse = rope_ids_full
 
+        if ids_keep is not None:
+            v1_sparse = v1_full.gather(
+                2,
+                ids_keep[:, None, :, None].expand(-1, v1_full.size(1), -1, v1_full.size(-1)),
+            )
+        else:
+            v1_sparse = v1_full
+
         # ------------------------------------------------------------------
         # 3) Middle blocks gθ on sparse tokens
         # ------------------------------------------------------------------
         x_mid = x_sparse
         for i in range(self.num_f, self.num_f + self.num_g):
-            x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse)  # (N, T_keep, D)
+            x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse, v1=v1_sparse)  # (N, T_keep, D)
 
         # ------------------------------------------------------------------
         # 4) Pad back to full length with [MASK] to get g_pad
@@ -551,7 +590,7 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         x_dec = h_in
         for i in range(self.num_f + self.num_g, self.depth):
-            x_dec = self.blocks[i](x_dec, c, self.feat_rope, rope_ids_full)
+            x_dec = self.blocks[i](x_dec, c, self.feat_rope, rope_ids_full, v1=v1_full)
 
         x_out, cls_token_out = self.final_layer(x_dec, c, cls=cls_token)
         x_out = self.unpatchify(x_out)
