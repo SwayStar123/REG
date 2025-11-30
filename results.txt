@@ -63,3 +63,11 @@ B/1 @ 400k - 14-16 it/s
                 kd_variance: 0.00868638562874775
 
                 with Value Residual: 10-11.5 it/s
+                    Inception Score: 201.991943359375
+                    FID: 3.644646410691962
+                    sFID: 5.981125132939383
+                    Precision: 0.79814
+                    Recall: 0.56
+
+                    kd_value: 0.35277
+                    kd_variance: 0.00738
