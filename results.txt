@@ -91,3 +91,6 @@ B/1 @ 400k - 14-16 it/s
 
                         kd_value: 0.36604
                         kd_variance: 0.00756
+
+                    with XIELU: 8-10 it/s
+                    with m3:

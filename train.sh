@@ -19,7 +19,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --cls=0.03 \
     --qk-norm \
     --activation-fn="xielu" \
-    --resume-step=50000
+    --resume-step=200000
 
 
 accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
