@@ -18,6 +18,11 @@ import torch.nn.functional as F
 
 from models.pos_embed import VisionRotaryEmbeddingFast
 
+class SquaredReLU(nn.Module):
+    def forward(self, x):
+        # (ReLU(x))^2
+        return torch.relu(x).pow(2)
+
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
         nn.Linear(hidden_size, projector_dim),
@@ -179,7 +184,7 @@ class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, adaRMSN_modulation=None, **block_kwargs):
         super().__init__()
         self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
@@ -189,11 +194,11 @@ class SiTBlock(nn.Module):
             self.attn.fused_attn = block_kwargs["fused_attn"]
         self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        activation_fn = lambda: SquaredReLU()
         self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
+            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=activation_fn, drop=0
         )
-        self.adaLN_modulation = nn.Sequential(
+        self.adaRMSN_modulation = adaRMSN_modulation if adaRMSN_modulation is not None else nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
@@ -206,7 +211,7 @@ class SiTBlock(nn.Module):
         rope_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(c).chunk(6, dim=-1)
+            self.adaRMSN_modulation(c).chunk(6, dim=-1)
         )
         x = x + gate_msa.unsqueeze(1) * self.attn(
             modulate(self.norm1(x), shift_msa, scale_msa),
@@ -229,13 +234,13 @@ class FinalLayer(nn.Module):
         self.norm_final = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
-        self.adaLN_modulation = nn.Sequential(
+        self.adaRMSN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
 
     def forward(self, x, c, cls=None):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+        shift, scale = self.adaRMSN_modulation(c).chunk(2, dim=-1)
         x = modulate(self.norm_final(x), shift, scale)
 
         if cls is None:
@@ -312,8 +317,21 @@ class SiT(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
+        # Shared adaptive RMSNorm modulation and attention projections across all blocks
+        self.adaRMSN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True),
+        )
+
         self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
+            SiTBlock(
+                hidden_size,
+                num_heads,
+                mlp_ratio=mlp_ratio,
+                adaRMSN_modulation=self.adaRMSN_modulation,
+                **block_kwargs,
+            )
+            for _ in range(depth)
         ])
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
@@ -365,14 +383,13 @@ class SiT(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in SiT blocks:
-        for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        # Zero-out shared adaRMSN modulation in SiT blocks:
+        nn.init.constant_(self.adaRMSN_modulation[-1].weight, 0)
+        nn.init.constant_(self.adaRMSN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.adaRMSN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaRMSN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
         nn.init.constant_(self.final_layer.linear_cls.weight, 0)
