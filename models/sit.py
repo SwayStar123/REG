@@ -124,6 +124,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.RMSNorm,
         use_v1_residual: bool = True,
+        use_v1_linear: bool = False,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -139,8 +140,15 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-        if use_v1_residual:
-            self.v1_lambda = nn.Parameter(torch.tensor(0.5))
+        self.use_v1_residual = use_v1_residual
+        self.use_v1_linear = use_v1_linear
+        if self.use_v1_residual:
+            if self.use_v1_linear:
+                # Linear fusion of [v1, v] along channel dim
+                self.v_fusion = nn.Linear(2 * self.head_dim, self.head_dim)
+            else:
+                # Scalar interpolation between cached v1 and current v
+                self.v1_lambda = nn.Parameter(torch.tensor(0.5))
         self.v_last = None
 
         # for API compatibility with timm Attention
@@ -170,8 +178,13 @@ class Attention(nn.Module):
         self.v_last = v
         q, k = self.q_norm(q), self.k_norm(k)
 
-        if v1 is not None:
-            v = self.v1_lambda * v1 + (1.0 - self.v1_lambda) * v
+        if v1 is not None and self.use_v1_residual:
+            if self.use_v1_linear:
+                # v, v1: (B, H, N, Dh) -> concat on channel dim then fuse
+                v_cat = torch.cat([v1, v], dim=-1)
+                v = self.v_fusion(v_cat)
+            else:
+                v = self.v1_lambda * v1 + (1.0 - self.v1_lambda) * v
 
         if rope is not None:
             q = rope(q, rope_ids)
@@ -203,6 +216,7 @@ class SiTBlock(nn.Module):
             qkv_bias=True,
             qk_norm=block_kwargs["qk_norm"],
             use_v1_residual=use_v1_residual,
+            use_v1_linear=block_kwargs.get("use_v1_linear", False),
         )
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
