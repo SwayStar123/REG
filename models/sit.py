@@ -18,6 +18,11 @@ import torch.nn.functional as F
 
 from models.pos_embed import VisionRotaryEmbeddingFast
 
+class SquaredReLU(nn.Module):
+    def forward(self, x):
+        # (ReLU(x))^2
+        return torch.relu(x).pow(2)
+
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
         nn.Linear(hidden_size, projector_dim),
@@ -188,10 +193,10 @@ class SiTBlock(nn.Module):
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
         self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        activation_fn = lambda: SquaredReLU()
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
+            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=activation_fn, drop=0
         )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
@@ -262,7 +267,8 @@ class SiT(nn.Module):
         encoder_depth=8,
         depth=28,
         num_heads=16,
-        mlp_ratio=4.0,
+        mlp_ratio_min=2.0,
+        mlp_ratio_max=6.0,
         class_dropout_prob=0.1,
         num_classes=1000,
         use_cfg=False,
@@ -282,6 +288,17 @@ class SiT(nn.Module):
         self.z_dims = z_dims
         self.encoder_depth = encoder_depth
         self.depth = depth
+
+        # Layerwise MLP scaling: start at width multiplier 2.0, end at `mlp_ratio` (default 6.0)
+        mf_min = mlp_ratio_min
+        mf_max = mlp_ratio_max
+        self.mlp_ratios = []
+        for i in range(self.depth):
+            if self.depth == 1:
+                mf = mf_max
+            else:
+                mf = mf_min + (mf_max - mf_min) * i / (self.depth - 1)
+            self.mlp_ratios.append(mf)
 
         # ----------------- SPRINT configuration -----------------
         # fθ / gθ / hθ split: default 2 / (D-4) / 2 as in the paper.
@@ -313,7 +330,8 @@ class SiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, **block_kwargs) for _ in range(depth)
+            SiTBlock(hidden_size, num_heads, mlp_ratio=self.mlp_ratios[i], **block_kwargs)
+            for i in range(depth)
         ])
         self.projectors = nn.ModuleList([
             build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
