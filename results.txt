@@ -101,3 +101,6 @@ B/1 @ 400k - 14-16 it/s
 
                             kd_value: 0.35543
                             kd_variance: 0.00785
+
+                        with Value Residual linear fusion: 9.5-11 it/s
+                        

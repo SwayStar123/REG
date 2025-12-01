@@ -23,6 +23,7 @@ from loss import SILoss
 from utils import load_encoders
 
 from datasets import load_dataset
+from dataset import CustomDataset
 from preprocessing.encoders import load_invae
 # import wandb_utils
 import wandb
@@ -211,24 +212,29 @@ def main(args):
         os.environ["HUGGINGFACE_HUB_CACHE"] = args.hf_cache_dir
         os.environ["HF_DATASETS_CACHE"] = args.hf_cache_dir
 
-    # Setup data using Hugging Face dataset built from CustomDataset
-    hf_dataset = load_dataset("SwayStar123/repa-imagenet-256-invae", split="train")
-    # Ensure we get torch tensors for all three columns
-    hf_dataset.set_format(type="torch", columns=["image", "vae_moments", "label"])
+    # Setup data: optionally use HF dataset, otherwise fall back to local CustomDataset
+    if args.use_hf_dataset:
+        hf_dataset = load_dataset("SwayStar123/repa-imagenet-256-invae", split="train")
+        # Ensure we get torch tensors for all three columns
+        hf_dataset.set_format(type="torch", columns=["image", "vae_moments", "label"])
 
-    class HFDatasetWrapper(torch.utils.data.Dataset):
-        def __init__(self, hf_ds):
-            self.hf_ds = hf_ds
+        class HFDatasetWrapper(torch.utils.data.Dataset):
+            def __init__(self, hf_ds):
+                self.hf_ds = hf_ds
 
-        def __len__(self):
-            return len(self.hf_ds)
+            def __len__(self):
+                return len(self.hf_ds)
 
-        def __getitem__(self, idx):
-            ex = self.hf_ds[idx]
-            # Return in the same order as CustomDataset: (raw_image, vae_moments, label)
-            return ex["image"], ex["vae_moments"], ex["label"]
+            def __getitem__(self, idx):
+                ex = self.hf_ds[idx]
+                # Return in the same order as CustomDataset: (raw_image, vae_moments, label)
+                return ex["image"], ex["vae_moments"], ex["label"]
 
-    train_dataset = HFDatasetWrapper(hf_dataset)
+        train_dataset = HFDatasetWrapper(hf_dataset)
+        dataset_len = len(train_dataset)
+    else:
+        train_dataset = CustomDataset(args.data_dir)
+        dataset_len = len(train_dataset)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
     train_dataloader = DataLoader(
         train_dataset,
@@ -239,7 +245,7 @@ def main(args):
         drop_last=True
     )
     if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(train_dataset):,} images (HF: SwayStar123/repa-imagenet-256-invae)")
+        logger.info(f"Dataset contains {dataset_len:,} images")
     
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
@@ -445,6 +451,9 @@ def parse_args(input_args=None):
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ops-head", type=int, default=16)
     parser.add_argument("--use-v1-linear", action=argparse.BooleanOptionalAction, default=False)
+
+    # data source
+    parser.add_argument("--use-hf-dataset", action=argparse.BooleanOptionalAction, default=False)
 
     # dataset
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")

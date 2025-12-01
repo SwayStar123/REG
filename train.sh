@@ -14,9 +14,10 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2-valres" \
+    --exp-name="b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2-valreslinear" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
-    --hf-cache-dir "/mnt/data/sway/hf_cache"
+    --hf-cache-dir "/mnt/data/sway/hf_cache" \
+    --use-v1-linear
