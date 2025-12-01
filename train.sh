@@ -18,4 +18,5 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --qk-norm
+    --qk-norm \
+    --hf-cache-dir "/mnt/data/sway/hf_cache"

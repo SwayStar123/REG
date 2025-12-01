@@ -22,7 +22,7 @@ from models.sit import SiT_models
 from loss import SILoss
 from utils import load_encoders
 
-from dataset import CustomDataset
+from datasets import load_dataset
 from preprocessing.encoders import load_invae
 # import wandb_utils
 import wandb
@@ -204,8 +204,31 @@ def main(args):
         eps=args.adam_epsilon,
     )    
     
-    # Setup data:
-    train_dataset = CustomDataset(args.data_dir)
+    # Setup HF cache dirs so everything stays on the user-specified storage
+    if args.hf_cache_dir is not None:
+        os.makedirs(args.hf_cache_dir, exist_ok=True)
+        os.environ["HF_HOME"] = args.hf_cache_dir
+        os.environ["HUGGINGFACE_HUB_CACHE"] = args.hf_cache_dir
+        os.environ["HF_DATASETS_CACHE"] = args.hf_cache_dir
+
+    # Setup data using Hugging Face dataset built from CustomDataset
+    hf_dataset = load_dataset("SwayStar123/repa-imagenet-256-invae", split="train")
+    # Ensure we get torch tensors for all three columns
+    hf_dataset.set_format(type="torch", columns=["image", "vae_moments", "label"])
+
+    class HFDatasetWrapper(torch.utils.data.Dataset):
+        def __init__(self, hf_ds):
+            self.hf_ds = hf_ds
+
+        def __len__(self):
+            return len(self.hf_ds)
+
+        def __getitem__(self, idx):
+            ex = self.hf_ds[idx]
+            # Return in the same order as CustomDataset: (raw_image, vae_moments, label)
+            return ex["image"], ex["vae_moments"], ex["label"]
+
+    train_dataset = HFDatasetWrapper(hf_dataset)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
     train_dataloader = DataLoader(
         train_dataset,
@@ -216,7 +239,7 @@ def main(args):
         drop_last=True
     )
     if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_dir})")
+        logger.info(f"Dataset contains {len(train_dataset):,} images (HF: SwayStar123/repa-imagenet-256-invae)")
     
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
@@ -427,6 +450,7 @@ def parse_args(input_args=None):
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
     parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae")
+    parser.add_argument("--hf-cache-dir", type=str, default=None)
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")
