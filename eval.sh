@@ -1,7 +1,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-valres"
+SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-relu2-valres"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
@@ -25,7 +25,8 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
-  --qk-norm
+  --qk-norm \
+  --global-seed 1
 
 
 python ./evaluations/evaluator.py \

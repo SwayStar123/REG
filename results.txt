@@ -62,12 +62,42 @@ B/1 @ 400k - 14-16 it/s
                 kd_value: 0.36751934074190595
                 kd_variance: 0.00868638562874775
 
-                with Value Residual: 10-11.5 it/s
-                    Inception Score: 201.991943359375
-                    FID: 3.644646410691962
-                    sFID: 5.981125132939383
-                    Precision: 0.79814
-                    Recall: 0.56
+                with QK Norm
+                    Inception Score: 193.48756408691406
+                    FID: 4.019138690539364
+                    sFID: 6.184206727182641
+                    Precision: 0.78416
+                    Recall: 0.5634
 
-                    kd_value: 0.35277
-                    kd_variance: 0.00738
+                    kd_value: 0.36407
+                    kd_variance: 0.00848
+
+                    with Value Residual: 10-11.5 it/s
+                        Inception Score: 201.991943359375
+                        FID: 3.644646410691962
+                        sFID: 5.981125132939383
+                        Precision: 0.79814
+                        Recall: 0.56
+
+                        kd_value: 0.35277
+                        kd_variance: 0.00738
+
+                    with RELU^2:
+                        Inception Score: 198.41360473632812
+                        FID: 3.807236145347929
+                        sFID: 6.466709181560304
+                        Precision: 0.77766
+                        Recall: 0.5717
+
+                        kd_value: 0.35136
+                        kd_variance: 0.00765
+
+                        with Value Residual:
+                            Inception Score: 195.07762145996094                                                                                                                          
+                            FID: 3.805057276246316                                                                                                                                       
+                            sFID: 6.314638067183637                                                       
+                            Precision: 0.77482                                                                                                                                           
+                            Recall: 0.5791  
+
+                            kd_value: 0.35543
+                            kd_variance: 0.00785
