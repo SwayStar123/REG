@@ -83,3 +83,11 @@ B/1 @ 400k - 14-16 it/s
                         kd_variance: 0.00765
 
                         with adaRMSN sharing - 101,255,968:
+                            Inception Score: 169.51388549804688
+                            FID: 4.5996176210441035
+                            sFID: 6.565183652803398
+                            Precision: 0.77998
+                            Recall: 0.5581
+
+                            kd_value: 0.36801
+                            kd_variance: 0.00800
