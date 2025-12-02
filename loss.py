@@ -14,6 +14,9 @@ def sum_flat(x):
     """
     return torch.sum(x, dim=list(range(1, len(x.size()))))
 
+def _drop_cls(x):  # x: [B, T, D], drop token 0
+    return x[:, 1:, :]
+
 def _autocorr(tokens_no_cls: torch.Tensor) -> torch.Tensor:
     # tokens_no_cls: [B, N, D]; cosine autocorr A(H) = Hn Hn^T
     Hn = F.normalize(tokens_no_cls, dim=-1)
