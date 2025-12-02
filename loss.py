@@ -103,4 +103,14 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+        # structural autocorrelation alignment, exclude CLS
+        struc_loss = 0.0
+        for z, z_tilde in zip(zs, zs_tilde):
+            z_nc = _drop_cls(z)            # [B,N,D]
+            h_nc = _drop_cls(z_tilde)
+            A_enc = _autocorr(z_nc)
+            A_den = _autocorr(h_nc)
+            struc_loss += ((A_enc - A_den) ** 2).mean()
+        struc_loss /= len(zs)
+        
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, struc_loss
