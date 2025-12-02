@@ -317,7 +317,7 @@ def main(args):
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff
                 struc_loss_mean = struc_loss.mean() * args.struc_coeff
-                cfm_loss_mean = cfm_loss.mean() * args.cfm_coeff + cfm_loss_cls.mean() * args.cfm_coeff
+                cfm_loss_mean = cfm_loss.mean() * args.cfm_coeff
                 loss = loss_mean + proj_loss_mean + loss_mean_cls + struc_loss_mean + cfm_loss_mean
 
                 ## optimization
