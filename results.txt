@@ -81,3 +81,13 @@ B/1 @ 400k - 14-16 it/s
 
                         kd_value: 0.35277
                         kd_variance: 0.00738
+
+                        with SARA_struc:
+                            Inception Score: 200.1361083984375
+                            FID: 3.7067145751084354
+                            sFID: 6.067484407028132
+                            Precision: 0.79306
+                            Recall: 0.5529
+
+                            kd_value: 0.35089
+                            kd_variance: 0.00795
