@@ -54,7 +54,8 @@ def euler_maruyama_sampler(
         guidance_high=1.0,
         path_type="linear",
         cls_latents=None,
-        args=None
+        args=None,
+        w=None,
         ):
     # setup conditioning
     if cfg_scale > 1.0:
@@ -86,6 +87,18 @@ def euler_maruyama_sampler(
                 y_cur = y
 
             kwargs = dict(y=y_cur)
+            # optional learned guidance scale w conditioning
+            if w is not None:
+                if w.dim() == 0:
+                    w_cur = w.expand(model_input.size(0))
+                else:
+                    if w.size(0) == model_input.size(0):
+                        w_cur = w
+                    elif model_input.size(0) == 2 * w.size(0):
+                        w_cur = torch.cat([w, w], dim=0)
+                    else:
+                        w_cur = w[: model_input.size(0)]
+                kwargs["w"] = w_cur
             time_input = torch.ones(model_input.size(0)).to(device=device, dtype=torch.float64) * t_cur
             diffusion = compute_diffusion(t_cur)
 
@@ -134,6 +147,18 @@ def euler_maruyama_sampler(
         cls_model_input = cls_x_cur
         y_cur = y            
     kwargs = dict(y=y_cur)
+    # optional learned guidance scale w conditioning for final step
+    if w is not None:
+        if w.dim() == 0:
+            w_cur = w.expand(model_input.size(0))
+        else:
+            if w.size(0) == model_input.size(0):
+                w_cur = w
+            elif model_input.size(0) == 2 * w.size(0):
+                w_cur = torch.cat([w, w], dim=0)
+            else:
+                w_cur = w[: model_input.size(0)]
+        kwargs["w"] = w_cur
     time_input = torch.ones(model_input.size(0)).to(
         device=device, dtype=torch.float64
         ) * t_cur

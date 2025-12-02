@@ -92,9 +92,11 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        # sample random guidance weight w in [0, max_w]
+        # sample random guidance weight w in [0, max_w], with at least 25% of samples having w = 0
         bsz = images.shape[0]
-        w = torch.rand(bsz, device=images.device, dtype=images.dtype) * self.max_w
+        w_raw = torch.rand(bsz, device=images.device, dtype=images.dtype) * self.max_w
+        drop_mask = torch.rand(bsz, device=images.device) < 0.25  # ~25% zeros
+        w = torch.where(drop_mask, torch.zeros_like(w_raw), w_raw)
 
         # forward student with optional conditioning on w
         student_kwargs = dict(model_kwargs)
@@ -116,53 +118,77 @@ class SILoss:
             w_img = w.view(-1, 1, 1, 1)
             w_cls = w.view(-1, 1)
 
+            # indices where w > 0 (only these need EMA teacher guidance)
+            nz_mask = w > 0
+
             # model guidance: base_target + w * (ema_cond - ema_uncond)
-            if self.guidance_mode == "model":
+            if self.guidance_mode == "model" and nz_mask.any():
                 with torch.no_grad():
+                    # restrict EMA computation to non-zero-w samples
+                    idx = nz_mask
                     y_cond = labels
                     y_uncond = torch.full_like(labels, num_classes, device=labels.device)
 
-                    ema_input = torch.cat([model_input, model_input], dim=0)
-                    ema_cls_input = torch.cat([cls_input, cls_input], dim=0)
-                    ema_t = torch.cat([time_input.flatten(), time_input.flatten()], dim=0)
-                    ema_y = torch.cat([y_cond, y_uncond], dim=0)
+                    ema_input = torch.cat([model_input[idx], model_input[idx]], dim=0)
+                    ema_cls_input = torch.cat([cls_input[idx], cls_input[idx]], dim=0)
+                    ema_t = torch.cat([time_input.flatten()[idx], time_input.flatten()[idx]], dim=0)
+                    ema_y = torch.cat([y_cond[idx], y_uncond[idx]], dim=0)
 
-                    ema_out, _, ema_cls_out = self.ema_model(ema_input, ema_t, ema_y, cls_token=ema_cls_input)
+                    # Teacher should be evaluated at w = 0 (no learned guidance)
+                    ema_w = torch.zeros_like(w[idx])
+                    ema_w = torch.cat([ema_w, ema_w], dim=0)
+
+                    ema_out, _, ema_cls_out = self.ema_model(
+                        ema_input, ema_t, ema_y, cls_token=ema_cls_input, w=ema_w
+                    )
                     ema_cond, ema_uncond = ema_out.chunk(2)
                     ema_cls_cond, ema_cls_uncond = ema_cls_out.chunk(2)
 
-                model_target = base_target + w_img * (ema_cond - ema_uncond)
-                cls_target = base_target_cls + w_cls * (ema_cls_cond - ema_cls_uncond)
+                # update targets only for non-zero-w indices
+                model_target[idx] = base_target[idx] + w_img[idx] * (ema_cond - ema_uncond)
+                cls_target[idx] = base_target_cls[idx] + w_cls[idx] * (ema_cls_cond - ema_cls_uncond)
 
             # truth guidance: base_target + w * (base_target - ema_uncond)
-            elif self.guidance_mode == "truth":
+            elif self.guidance_mode == "truth" and nz_mask.any():
                 with torch.no_grad():
+                    idx = nz_mask
                     y_uncond = torch.full_like(labels, num_classes, device=labels.device)
 
-                    ema_input = model_input
-                    ema_cls_input = cls_input
-                    ema_t = time_input.flatten()
-                    ema_y = y_uncond
+                    ema_input = model_input[idx]
+                    ema_cls_input = cls_input[idx]
+                    ema_t = time_input.flatten()[idx]
+                    ema_y = y_uncond[idx]
 
-                    ema_uncond, _, ema_cls_uncond = self.ema_model(ema_input, ema_t, ema_y, cls_token=ema_cls_input)
+                    # Teacher should be evaluated at w = 0 (no learned guidance)
+                    ema_w = torch.zeros_like(w[idx])
 
-                model_target = base_target + w_img * (base_target - ema_uncond)
-                cls_target = base_target_cls + w_cls * (base_target_cls - ema_cls_uncond)
+                    ema_uncond, _, ema_cls_uncond = self.ema_model(
+                        ema_input, ema_t, ema_y, cls_token=ema_cls_input, w=ema_w
+                    )
+
+                model_target[idx] = base_target[idx] + w_img[idx] * (base_target[idx] - ema_uncond)
+                cls_target[idx] = base_target_cls[idx] + w_cls[idx] * (base_target_cls[idx] - ema_cls_uncond)
 
             # truth guidance (cond): base_target + w * (base_target - ema_cond)
-            elif self.guidance_mode == "truth_cond":
+            elif self.guidance_mode == "truth_cond" and nz_mask.any():
                 with torch.no_grad():
+                    idx = nz_mask
                     y_cond = labels
 
-                    ema_input = model_input
-                    ema_cls_input = cls_input
-                    ema_t = time_input.flatten()
-                    ema_y = y_cond
+                    ema_input = model_input[idx]
+                    ema_cls_input = cls_input[idx]
+                    ema_t = time_input.flatten()[idx]
+                    ema_y = y_cond[idx]
 
-                    ema_cond, _, ema_cls_cond = self.ema_model(ema_input, ema_t, ema_y, cls_token=ema_cls_input)
+                    # Teacher should be evaluated at w = 0 (no learned guidance)
+                    ema_w = torch.zeros_like(w[idx])
 
-                model_target = base_target + w_img * (base_target - ema_cond)
-                cls_target = base_target_cls + w_cls * (base_target_cls - ema_cls_cond)
+                    ema_cond, _, ema_cls_cond = self.ema_model(
+                        ema_input, ema_t, ema_y, cls_token=ema_cls_input, w=ema_w
+                    )
+
+                model_target[idx] = base_target[idx] + w_img[idx] * (base_target[idx] - ema_cond)
+                cls_target[idx] = base_target_cls[idx] + w_cls[idx] * (base_target_cls[idx] - ema_cls_cond)
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)

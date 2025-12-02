@@ -130,6 +130,8 @@ def main(args):
         z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
         y = torch.randint(0, args.num_classes, (n,), device=device)
         cls_z = torch.randn(n, args.cls, device=device)
+        # Learned guidance scale w for sampling
+        w_sample = torch.full((n,), args.w_scale, device=device, dtype=z.dtype)
 
         # Sample images:
         sampling_kwargs = dict(
@@ -138,12 +140,13 @@ def main(args):
             y=y,
             num_steps=args.num_steps, 
             heun=args.heun,
-            cfg_scale=args.cfg_scale,
+            cfg_scale=1.0,
             guidance_low=args.guidance_low,
             guidance_high=args.guidance_high,
             path_type=args.path_type,
             cls_latents=cls_z,
-            args=args
+            args=args,
+            w=w_sample,
         )
         with torch.no_grad():
             if args.mode == "sde":
@@ -211,6 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--heun", action=argparse.BooleanOptionalAction, default=False) # only for ode
     parser.add_argument("--guidance-low", type=float, default=0.)
     parser.add_argument("--guidance-high", type=float, default=1.)
+    parser.add_argument("--w-scale", type=float, default=1.0)
     parser.add_argument('--local-rank', default=-1, type=int)
     parser.add_argument('--cls', default=768, type=int)
     # will be deprecated

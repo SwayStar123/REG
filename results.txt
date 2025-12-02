@@ -81,3 +81,5 @@ B/1 @ 400k - 14-16 it/s
 
                         kd_value: 0.35277
                         kd_variance: 0.00738
+
+                        with Model Guidance: 8-9 it/s

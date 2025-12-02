@@ -276,6 +276,8 @@ def main(args):
     n = ys.size(0)
     xT = torch.randn((n, channels, latent_size, latent_size), device=device)
     cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+    # Learned guidance scale used at sampling time (same range as distillation)
+    w_sample = torch.full((n,), args.distill_max_w, device=device, dtype=xT.dtype)
     
     if accelerator.is_main_process:
         sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
@@ -357,12 +359,13 @@ def main(args):
                         y=ys.clone(),
                         num_steps=args.num_sample_steps,
                         heun=False,
-                        cfg_scale=args.cfg_scale,
+                        cfg_scale=1.0,
                         guidance_low=args.guidance_low,
                         guidance_high=args.guidance_high,
                         path_type=args.path_type,
                         cls_latents=cls_z.clone(),
                         args=args,
+                        w=w_sample.clone(),
                     )
                 samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
 
