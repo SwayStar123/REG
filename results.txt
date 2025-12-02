@@ -103,4 +103,11 @@ B/1 @ 400k - 14-16 it/s
                             kd_variance: 0.00785
 
                         with Value Residual linear fusion: 9.5-11 it/s
-                        
+                            Inception Score: 191.7511749267578
+                            FID: 3.8602391739902373
+                            sFID: 6.1020425499840485
+                            Precision: 0.77258
+                            Recall: 0.5763
+                            
+                            kd_value: 0.36542
+                            kd_variance: 0.00793
