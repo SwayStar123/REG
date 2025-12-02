@@ -184,9 +184,12 @@ def main(args):
     loss_fn = SILoss(
         prediction=args.prediction,
         path_type=args.path_type, 
+        weighting=args.weighting,
         encoders=encoders,
         accelerator=accelerator,
-        weighting=args.weighting
+        ema_model=ema,
+        guidance_mode=args.distill_guidance,
+        max_w=args.distill_max_w,
     )
     if accelerator.is_main_process:
         logger.info(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -461,6 +464,10 @@ def parse_args(input_args=None):
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cls", type=float, default=0.03)
     parser.add_argument("--struc-coeff", type=float, default=0.5)   # β
+
+    # distillation guidance
+    parser.add_argument("--distill-guidance", type=str, default="none", choices=["none", "model", "truth", "truth_cond"], help="Type of EMA-based guided distillation target.")
+    parser.add_argument("--distill-max-w", type=float, default=6.0, help="Maximum guidance weight w sampled uniformly from [0, max_w].")
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")

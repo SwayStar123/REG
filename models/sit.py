@@ -324,6 +324,7 @@ class SiT(nn.Module):
             )
         self.t_embedder = TimestepEmbedder(hidden_size) # timestep embedding type
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        self.w_embedder = nn.Linear(1, hidden_size, bias=True)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, hidden_size), requires_grad=False)
@@ -386,6 +387,9 @@ class SiT(nn.Module):
 
         # Initialize label embedding table:
         nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        nn.init.normal_(self.w_embedder.weight, std=0.02)
+        if self.w_embedder.bias is not None:
+            nn.init.constant_(self.w_embedder.bias, 0)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -476,7 +480,7 @@ class SiT(nn.Module):
         return h
 
     # ---------------------------------------------------------------------
-    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None):
+    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None, w: Optional[torch.Tensor] = None):
         """
         Forward pass of SiT with SPRINT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -514,6 +518,15 @@ class SiT(nn.Module):
         t_embed = self.t_embedder(t)  # (N, D)
         y = self.y_embedder(y, self.training)  # (N, D)
         c = t_embed + y
+
+        # optional conditioning on scalar guidance weight w
+        if w is not None:
+            if w.dim() == 1:
+                w_in = w.view(-1, 1)
+            else:
+                w_in = w.reshape(N, 1)
+            w_emb = self.w_embedder(w_in.to(dtype=t_embed.dtype, device=t_embed.device))
+            c = c + w_emb
 
         # ------------------------------------------------------------------
         # 1) Encoder fθ on all tokens (dense, shallow)
