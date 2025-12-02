@@ -14,8 +14,28 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-sara" \
+    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-sara-cfm" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
-    --qk-norm
+    --qk-norm \
+    --cfm-weighting="uniform"
+
+accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
+    --report-to="wandb" \
+    --allow-tf32 \
+    --mixed-precision="bf16" \
+    --seed=0 \
+    --path-type="linear" \
+    --prediction="v" \
+    --weighting="uniform" \
+    --model="SiT-B/1" \
+    --enc-type="dinov2-vit-b" \
+    --proj-coeff=0.5 \
+    --output-dir="exps" \
+    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-sara-tcfm" \
+    --batch-size=256 \
+    --data-dir="dataset" \
+    --cls=0.03 \
+    --qk-norm \
+    --cfm-weighting="linear"
