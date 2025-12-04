@@ -12,6 +12,15 @@ sFID: 4.411010295598999
 Precision: 0.76946
 Recall: 0.6317
 
+    with SPRINT + RMS + ROPE + RELU2 + VALRES:
+        Inception Score: 265.0180969238281
+        FID: 2.61406202232871
+        sFID: 4.812557585819945
+        Precision: 0.81848
+        Recall: 0.5853
+
+
+
 B/1 @ 400k - 14-16 it/s
     Inception Score: 104.53033447265625
     FID: 10.557701187487567
