@@ -476,7 +476,7 @@ class SiT(nn.Module):
         return h
 
     # ---------------------------------------------------------------------
-    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None):
+    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None, uncond: bool = False):
         """
         Forward pass of SiT with SPRINT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -569,7 +569,10 @@ class SiT(nn.Module):
         g_pad = self._pad_with_mask(x_mid, ids_keep, T_full=T)
 
         # ------------------------------------------------------------------
-        # 5) Path-drop learning: sometimes drop whole sparse path (training only)
+        # 5) Path-drop learning
+        #    - During training: same behavior as before (stochastic path drop).
+        #    - During sampling: enable path drop only for unconditional flow
+        #      via the `uncond` flag.
         # ------------------------------------------------------------------
         if self.training and self.path_drop_prob > 0.0:
             # Sync random decision across all ranks
@@ -579,6 +582,9 @@ class SiT(nn.Module):
             if drop_path.item() < self.path_drop_prob:
                 # Keep gradient flow but zero out the contribution
                 g_pad = g_pad * 0.0 + self.mask_token.expand_as(g_pad)
+        elif uncond: # Drop path for all samples
+            g_pad = g_pad * 0.0 + self.mask_token.expand_as(g_pad)
+
 
         # ------------------------------------------------------------------
         # 6) Sparse–dense residual fusion: h_in = Fusion(ft, g_pad)

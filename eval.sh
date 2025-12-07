@@ -1,14 +1,14 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/xl1-reg-invae-sprint-rmsnorm-rope-qknorm-valres"
+SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-valres"
 NUM_STEP=250
-MODEL_SIZE='XL'
-CFG_SCALE=1.0
-CLS_CFG_SCALE=1.0
-GH=1.0
+MODEL_SIZE='B'
+CFG_SCALE=1.65
+CLS_CFG_SCALE=1.65
+GH=0.85
 PATCH_SIZE=1
-
+PATH_DROP=True
 export NCCL_P2P_DISABLE=1
 
 python -m torch.distributed.launch --master_port=$random_number --nproc_per_node=$NUM_GPUS generate.py \
@@ -30,7 +30,7 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \
-    --sample_batch ${SAVE_PATH}/checkpoints/SiT-${MODEL_SIZE}-${PATCH_SIZE}-${STEP}-size-256-vae-invae-cfg-${CFG_SCALE}-seed-0-sde-${GH}-${CLS_CFG_SCALE}.npz \
+    --sample_batch ${SAVE_PATH}/checkpoints/SiT-${MODEL_SIZE}-${PATCH_SIZE}-${STEP}-size-256-vae-invae-cfg-${CFG_SCALE}-seed-0-sde-${GH}-${CLS_CFG_SCALE}-pathdrop-${PATH_DROP}.npz \
     --save_path ${SAVE_PATH}/checkpoints \
     --cfg_cond 1 \
     --step ${STEP} \

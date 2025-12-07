@@ -21,7 +21,7 @@ from PIL import Image
 import numpy as np
 import math
 import argparse
-from samplers import euler_maruyama_sampler
+from samplers import euler_maruyama_sampler, euler_maruyama_sampler_path_drop
 from utils import load_legacy_checkpoints, download_model
 
 
@@ -102,7 +102,7 @@ def main(args):
     model_string_name = args.model.replace("/", "-")
     ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
     folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-invae-" \
-                  f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}"
+                  f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}-pathdrop-{args.path_drop}"
     sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
@@ -147,7 +147,10 @@ def main(args):
         )
         with torch.no_grad():
             if args.mode == "sde":
-                samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+                if args.path_drop:
+                    samples = euler_maruyama_sampler_path_drop(**sampling_kwargs).to(torch.float32)
+                else:
+                    samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
             elif args.mode == "ode":# will support
                 exit()
                 #samples = euler_sampler(**sampling_kwargs).to(torch.float32)
@@ -213,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--guidance-high", type=float, default=1.)
     parser.add_argument('--local-rank', default=-1, type=int)
     parser.add_argument('--cls', default=768, type=int)
+    parser.add_argument('--path-drop', default=True, action=argparse.BooleanOptionalAction,)
     # will be deprecated
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False) # only for ode
 
