@@ -18,26 +18,15 @@ After downloading ImageNet, please run the following scripts (please update 256x
 
 ```bash
 # Convert raw ImageNet data to a ZIP archive at 256x256 resolution
-python dataset_tools.py convert --source=data/ILSVRC/Data/CLS-LOC/train \
-    --dest=dataset/images --resolution=256x256 --transform=center-crop-dhariwal
+python preprocessing/dataset_tools.py convert --source=data/ILSVRC/Data/CLS-LOC/train \
+    --dest=dataset512/images --resolution=512x512 --transform=center-crop-dhariwal
 ```
 
 ```bash
 # Convert the pixel data to VAE latents
-python dataset_tools.py encode --source=dataset/images \
-    --dest=dataset/vae-sd
+python preprocessing/dataset_tools.py encode --source=dataset512/images \
+    --dest=dataset512/vae-in
 ```
-
-for validation set, do
-
-```
-python -m preprocessing.fix_val_labels \
-  --images-dir  /path/to/dataset/validation/images \
-  --xml-dir     /path/to/ILSVRC/Annotations/CLS-LOC/val
-```
-to fix the labels
-
-Here,`YOUR_DOWNLOAD_PATH` is the directory that you downloaded the dataset, and `TARGET_PATH` is the directory that you will save the preprocessed images and corresponding compressed latent vectors. This directory will be used for your experiment scripts. 
 
 ## Acknowledgement
 
