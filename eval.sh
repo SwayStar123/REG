@@ -1,12 +1,12 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rmsnorm-rope-qknorm-valres"
+SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm"
 NUM_STEP=250
 MODEL_SIZE='B'
-CFG_SCALE=1.65
-CLS_CFG_SCALE=1.65
-GH=0.85
+CFG_SCALE=1.0
+CLS_CFG_SCALE=1.0
+GH=1.0
 PATCH_SIZE=1
 PATH_DROP=True
 export NCCL_P2P_DISABLE=1
