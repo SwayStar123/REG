@@ -20,6 +20,7 @@ class SILoss:
             prediction='v',
             path_type="linear",
             weighting="uniform",
+            cfm_weighting="uniform",
             encoders=[], 
             accelerator=None, 
             ):
@@ -28,6 +29,7 @@ class SILoss:
         self.path_type = path_type
         self.encoders = encoders
         self.accelerator = accelerator
+        self.cfm_weighting = cfm_weighting
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -95,4 +97,13 @@ class SILoss:
                 proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
         proj_loss /= (len(zs) * bsz)
 
-        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls
+        cfm_target = torch.roll(model_target, shifts=1, dims=0)
+        cfm_target_cls = torch.roll(cls_target, shifts=1, dims=0)
+        if self.cfm_weighting == "uniform":
+            cfm_loss = -((model_output - cfm_target) ** 2).mean()
+            cfm_loss_cls = -((cls_output - cfm_target_cls) ** 2).mean()
+        elif self.cfm_weighting == "linear":
+            cfm_loss = -(((model_output - cfm_target) ** 2) * time_input).mean()
+            cfm_loss_cls = -(((cls_output - cfm_target_cls) ** 2) * time_input).mean()
+
+        return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, cfm_loss, cfm_loss_cls
