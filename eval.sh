@@ -1,8 +1,8 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm"
-NUM_STEP=250
+SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-tcfm"
+NUM_STEP=50
 MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
