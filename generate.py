@@ -220,6 +220,9 @@ if __name__ == "__main__":
     # will be deprecated
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False) # only for ode
 
+    parser.add_argument("--time-shifting", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shift-base", type=int, default=4096)
+
 
     args = parser.parse_args()
     main(args)

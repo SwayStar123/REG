@@ -56,10 +56,10 @@ def build_and_push(data_dir: str, repo_id: str, private: bool, max_shard_size: s
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Build and push HF dataset for REPA Imagenet-256")
+    parser = argparse.ArgumentParser(description="Build and push HF dataset for REPA Imagenet-512")
     parser.add_argument("--data-dir", type=str, required=True,
                         help="Root directory containing 'images' and 'vae-sd' subfolders")
-    parser.add_argument("--repo-id", type=str, default="SwayStar123/repa-imagenet-256-invae")
+    parser.add_argument("--repo-id", type=str, default="SwayStar123/repa-imagenet-512-invae")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--max-shard-size", type=str, default="10GB")
     parser.add_argument("--batch-size", type=int, default=512)

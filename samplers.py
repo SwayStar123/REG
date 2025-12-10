@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-
+import math
 
 def expand_t_like_x(t, x_cur):
     """Function to reshape time t to broadcastable dimension of x
@@ -43,6 +43,12 @@ def compute_diffusion(t_cur):
     return 2 * t_cur
 
 
+def apply_time_shift(t, shift_dim, shift_base=4096):
+    shift = math.sqrt(shift_dim / shift_base)
+    t_shifted = (shift * t) / (1 + (shift - 1) * t)
+    t_shifted = torch.clamp(t_shifted, 0.0, 1.0)
+    return t_shifted
+
 def euler_maruyama_sampler(
         model,
         latents,
@@ -65,6 +71,10 @@ def euler_maruyama_sampler(
 
     t_steps = torch.linspace(1., 0.04, num_steps, dtype=torch.float64)
     t_steps = torch.cat([t_steps, torch.tensor([0.], dtype=torch.float64)])
+    if args is not None and getattr(args, "time_shifting", False):
+        shift_dim = latents.shape[1] * latents.shape[2] * latents.shape[3]
+        shift_base = getattr(args, "shift_base", 4096)
+        t_steps = apply_time_shift(t_steps, shift_dim, shift_base)
     x_next = latents.to(torch.float64)
     cls_x_next = cls_latents.to(torch.float64)
     device = x_next.device
@@ -190,6 +200,12 @@ def euler_maruyama_sampler_path_drop(
 
     t_steps = torch.linspace(1., 0.04, num_steps, dtype=torch.float64)
     t_steps = torch.cat([t_steps, torch.tensor([0.], dtype=torch.float64)])
+
+    if args is not None and getattr(args, "time_shifting", False):
+        shift_dim = latents.shape[1] * latents.shape[2] * latents.shape[3]
+        shift_base = getattr(args, "shift_base", 4096)
+        t_steps = apply_time_shift(t_steps, shift_dim, shift_base)
+    
     x_next = latents.to(torch.float64)
     cls_x_next = cls_latents.to(torch.float64)
     device = x_next.device

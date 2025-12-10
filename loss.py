@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
+import math
 
 def mean_flat(x):
     """
@@ -23,6 +24,8 @@ class SILoss:
             cfm_weighting="uniform",
             encoders=[], 
             accelerator=None, 
+            apply_time_shift=False,
+            shift_base=4096,
             ):
         self.prediction = prediction
         self.weighting = weighting
@@ -30,6 +33,8 @@ class SILoss:
         self.encoders = encoders
         self.accelerator = accelerator
         self.cfm_weighting = cfm_weighting
+        self.apply_time_shift = apply_time_shift
+        self.shift_base = shift_base
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -63,7 +68,13 @@ class SILoss:
                     time_input = sigma / (1 + sigma)
                 elif self.path_type == "cosine":
                     time_input = 2 / np.pi * torch.atan(sigma)
-                
+        
+        if self.apply_time_shift:
+            shift_dim = images.shape[1] * images.shape[2] * images.shape[3]
+            shift = math.sqrt(shift_dim / self.shift_base)
+            time_input = (shift * time_input) / (1 + (shift - 1) * time_input)
+            time_input = torch.clamp(time_input, 0.0, 1.0)
+
         time_input = time_input.to(device=images.device, dtype=images.dtype)
 
         if noises is None:

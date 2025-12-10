@@ -188,6 +188,8 @@ def main(args):
         accelerator=accelerator,
         weighting=args.weighting,
         cfm_weighting=args.cfm_weighting,
+        apply_time_shift=args.time_shifting,
+        shift_base=args.shift_base,
     )
     if accelerator.is_main_process:
         logger.info(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -464,6 +466,9 @@ def parse_args(input_args=None):
     parser.add_argument("--cls", type=float, default=0.03)
     parser.add_argument("--cfm-weighting", default="uniform", choices=["uniform", "linear"], type=str)
     parser.add_argument("--cfm-coeff", type=float, default=0.05)
+
+    parser.add_argument("--time-shifting", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shift-base", type=int, default=4096)
 
     # sampling specific
     parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
