@@ -1,12 +1,12 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0050000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-timeshifting"
+STEP="0400000"
+SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-timeshifting-512"
 NUM_STEP=250
 MODEL_SIZE='B'
-CFG_SCALE=1.0
-CLS_CFG_SCALE=1.0
-GH=1.0
+CFG_SCALE=2.5
+CLS_CFG_SCALE=2.5
+GH=0.85
 PATCH_SIZE=1
 PATH_DROP=True
 export NCCL_P2P_DISABLE=1
@@ -25,7 +25,8 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
-  --qk-norm
+  --qk-norm \
+  --resolution=512
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \
