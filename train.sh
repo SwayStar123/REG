@@ -13,10 +13,12 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-timeshifting" \
+    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-timeshifting-512" \
     --batch-size=256 \
-    --data-dir="dataset" \
+    --data-dir="dataset512" \
     --cls=0.03 \
     --qk-norm \
     --cfm-weighting="uniform" \
-    --cfm-coeff=0.05
+    --cfm-coeff=0.05 \
+    --resolution=512 \
+    --resume-step 20000

@@ -103,6 +103,8 @@ def main(args):
     ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
     folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-invae-" \
                   f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}-pathdrop-{args.path_drop}"
+    if args.balanced_sampling:
+        folder_name += "-balanced"
     sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
@@ -128,7 +130,13 @@ def main(args):
     for _ in pbar:
         # Sample inputs:
         z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
-        y = torch.randint(0, args.num_classes, (n,), device=device)
+        if args.balanced_sampling:
+            # Use global sample indices to assign labels evenly across classes.
+            # This ensures each class index appears approximately equally often.
+            indices = (torch.arange(n, device=device) * dist.get_world_size() + rank + total)
+            y = (indices % args.num_classes).long()
+        else:
+            y = torch.randint(0, args.num_classes, (n,), device=device)
         cls_z = torch.randn(n, args.cls, device=device)
 
         # Sample images:
@@ -203,6 +211,9 @@ if __name__ == "__main__":
     # number of samples
     parser.add_argument("--per-proc-batch-size", type=int, default=32)
     parser.add_argument("--num-fid-samples", type=int, default=50_000)
+
+    parser.add_argument("--balanced-sampling", action=argparse.BooleanOptionalAction, default=True,
+                        help="If enabled, sample class labels in a balanced way so each class index appears equally often.")
 
     # sampling related hyperparameters
     parser.add_argument("--mode", type=str, default="ode")
