@@ -109,6 +109,25 @@ def main(args):
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
         print(f"Saving .png samples at {sample_folder_dir}")
+
+        # Check for existing PNG samples to optionally skip resampling.
+        existing_pngs = [f for f in os.listdir(sample_folder_dir) if f.endswith(".png")]
+        existing_count = len(existing_pngs)
+        if existing_count >= args.num_fid_samples:
+            print(
+                f"Found {existing_count} existing PNG samples in {sample_folder_dir}, "
+                f"skipping sampling and only rebuilding the .npz file."
+            )
+            need_sampling = False
+        else:
+            need_sampling = True
+    else:
+        need_sampling = True
+
+    # Broadcast need_sampling decision from rank 0 to all ranks.
+    need_sampling_tensor = torch.tensor(int(need_sampling), device=device)
+    dist.broadcast(need_sampling_tensor, src=0)
+    need_sampling = bool(need_sampling_tensor.item())
     dist.barrier()
 
     # Figure out how many samples we need to generate on each GPU and how many iterations we need to run:
@@ -116,7 +135,7 @@ def main(args):
     global_batch_size = n * dist.get_world_size()
     # To make things evenly-divisible, we'll sample a bit more than we need and then discard the extra samples:
     total_samples = int(math.ceil(args.num_fid_samples / global_batch_size) * global_batch_size)
-    if rank == 0:
+    if rank == 0 and need_sampling:
         print(f"Total number of images that will be sampled: {total_samples}")
         print(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
         print(f"projector Parameters: {sum(p.numel() for p in model.projectors.parameters()):,}")
@@ -124,67 +143,68 @@ def main(args):
     samples_needed_this_gpu = int(total_samples // dist.get_world_size())
     assert samples_needed_this_gpu % n == 0, "samples_needed_this_gpu must be divisible by the per-GPU batch size"
     iterations = int(samples_needed_this_gpu // n)
-    pbar = range(iterations)
-    pbar = tqdm(pbar) if rank == 0 else pbar
-    total = 0
-    for _ in pbar:
-        # Sample inputs:
-        z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
-        if args.balanced_sampling:
-            # Use global sample indices to assign labels evenly across classes.
-            # This ensures each class index appears approximately equally often.
-            indices = (torch.arange(n, device=device) * dist.get_world_size() + rank + total)
-            y = (indices % args.num_classes).long()
-        else:
-            y = torch.randint(0, args.num_classes, (n,), device=device)
-        cls_z = torch.randn(n, args.cls, device=device)
 
-        # Sample images:
-        sampling_kwargs = dict(
-            model=model, 
-            latents=z,
-            y=y,
-            num_steps=args.num_steps, 
-            heun=args.heun,
-            cfg_scale=args.cfg_scale,
-            guidance_low=args.guidance_low,
-            guidance_high=args.guidance_high,
-            path_type=args.path_type,
-            cls_latents=cls_z,
-            args=args
-        )
-        with torch.no_grad():
-            if args.mode == "sde":
-                if args.path_drop:
-                    samples = euler_maruyama_sampler_path_drop(**sampling_kwargs).to(torch.float32)
-                else:
-                    samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
-            elif args.mode == "ode":# will support
-                exit()
-                #samples = euler_sampler(**sampling_kwargs).to(torch.float32)
+    if need_sampling:
+        pbar = range(iterations)
+        pbar = tqdm(pbar) if rank == 0 else pbar
+        total = 0
+        for _ in pbar:
+            # Sample inputs:
+            z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
+            if args.balanced_sampling:
+                # Use global sample indices to assign labels evenly across classes.
+                # This ensures each class index appears approximately equally often.
+                indices = (torch.arange(n, device=device) * dist.get_world_size() + rank + total)
+                y = (indices % args.num_classes).long()
             else:
-                raise NotImplementedError()
+                y = torch.randint(0, args.num_classes, (n,), device=device)
+            cls_z = torch.randn(n, args.cls, device=device)
 
-            # For invae, apply 0.3099 scaling factor
-            scaling_factor = 0.3099
-            samples = vae.decode(samples / scaling_factor).sample
-            samples = (samples + 1) / 2.
-            samples = torch.clamp(
-                255. * samples, 0, 255
-                ).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+            # Sample images:
+            sampling_kwargs = dict(
+                model=model, 
+                latents=z,
+                y=y,
+                num_steps=args.num_steps, 
+                heun=args.heun,
+                cfg_scale=args.cfg_scale,
+                guidance_low=args.guidance_low,
+                guidance_high=args.guidance_high,
+                path_type=args.path_type,
+                cls_latents=cls_z,
+                args=args
+            )
+            with torch.no_grad():
+                if args.mode == "sde":
+                    if args.path_drop:
+                        samples = euler_maruyama_sampler_path_drop(**sampling_kwargs).to(torch.float32)
+                    else:
+                        samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+                elif args.mode == "ode":# will support
+                    exit()
+                    #samples = euler_sampler(**sampling_kwargs).to(torch.float32)
+                else:
+                    raise NotImplementedError()
 
-            # Save samples to disk as individual .png files
-            for i, sample in enumerate(samples):
-                index = i * dist.get_world_size() + rank + total
-                Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
-        total += global_batch_size
+                # For invae, apply 0.3099 scaling factor
+                scaling_factor = 0.3099
+                samples = vae.decode(samples / scaling_factor).sample
+                samples = (samples + 1) / 2.
+                samples = torch.clamp(
+                    255. * samples, 0, 255
+                    ).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+
+                # Save samples to disk as individual .png files
+                for i, sample in enumerate(samples):
+                    index = i * dist.get_world_size() + rank + total
+                    Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
+            total += global_batch_size
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
     if rank == 0:
         create_npz_from_sample_folder(sample_folder_dir, args.num_fid_samples)
         print("Done.")
-    dist.barrier()
     dist.destroy_process_group()
 
 

@@ -122,16 +122,6 @@ B/1 @ 400k - 14-16 it/s
                                 kd_value: 0.34521
                                 kd_variance: 0.00745
 
-                                with balanced label sampling:
-                                    Inception Score: 221.17398071289062
-                                    FID: 3.490749061364454
-                                    sFID: 5.670303007342113
-                                    Precision: 0.8075
-                                    Recall: 0.5456
-
-                                    kd_value: 0.33224
-                                    kd_variance: 0.00645
-
                         with 0.05 CFM with 250 steps:
                             Inception Score: 211.9276580810547
                             FID: 3.614958049019151
@@ -152,7 +142,15 @@ B/1 @ 400k - 14-16 it/s
                                 kd_value: 0.33657
                                 kd_variance: 0.00656
 
+                                with balanced label sampling:
+                                    Inception Score: 221.17398071289062
+                                    FID: 3.490749061364454
+                                    sFID: 5.670303007342113
+                                    Precision: 0.8075
+                                    Recall: 0.5456
 
+                                    kd_value: 0.33224
+                                    kd_variance: 0.00645
 
                         with 0.10 TCFM with 50 steps:
                             Inception Score: 213.4189453125
@@ -262,3 +260,14 @@ B/1 @ 400k - 14-16 it/s
 
                             kd_value: 0.24835
                             kd_variance: 0.00433
+
+512 resolution
+    B/1 @ 400k speedrun-dit:
+        Inception Score: 192.34141540527344
+        FID: 4.22562724768153
+        sFID: 5.463188062321706
+        Precision: 0.83904
+        Recall: 0.531
+
+        kd_value: 0.30648
+        kd_variance: 0.00669
