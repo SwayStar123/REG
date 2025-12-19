@@ -21,6 +21,7 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from models.sit import SiT_models
 from loss import SILoss
 from utils import load_encoders
+from muon import init_muon
 
 from dataset import CustomDataset
 from preprocessing.encoders import load_invae
@@ -199,13 +200,36 @@ def main(args):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )    
+    if args.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+    elif args.optimizer == "muon":
+        optimizer = init_muon(
+            model,
+            rank=accelerator.process_index,
+            world_size=accelerator.num_processes,
+            lr=args.muon_lr,
+            momentum=args.muon_momentum,
+            muon_wd=args.muon_weight_decay,
+            adamw_lr=args.learning_rate,
+            adamw_wd=args.adam_weight_decay,
+            adamw_keys=[
+                "x_embedder",       # patch embedding
+                "t_embedder",       # timestep embedding
+                "y_embedder",       # label embedding
+                "final_layer",      # output head
+                "cls_projectors2",  # cls projection MLP
+                "projectors",       # z projectors
+                "adaLN_modulation", # ada layer norm modulation
+            ],
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
     
     # Setup data:
     train_dataset = CustomDataset(args.data_dir)
@@ -442,12 +466,16 @@ def parse_args(input_args=None):
     parser.add_argument("--max-train-steps", type=int, default=400000)
     parser.add_argument("--checkpointing-steps", type=int, default=10000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"])
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--adam-beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam-beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam-weight-decay", type=float, default=0., help="Weight decay to use.")
     parser.add_argument("--adam-epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
+    parser.add_argument("--muon-lr", type=float, default=1e-3)
+    parser.add_argument("--muon-momentum", type=float, default=0.95)
+    parser.add_argument("--muon-weight-decay", type=float, default=0.01, help="Weight decay for the Muon optimizer.")
 
     # seed
     parser.add_argument("--seed", type=int, default=0)
