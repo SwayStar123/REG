@@ -161,6 +161,17 @@ class CombinedOptimizer(Optimizer):
         if closure is not None:
             loss = closure()
 
+        # Sync learning rates from combined param_groups to underlying optimizers
+        # This is necessary for LR schedulers to work correctly
+        adamw_group_count = len(self.adamw.param_groups)
+        for i, group in enumerate(self.param_groups):
+            if i < adamw_group_count:
+                # Update AdamW param group
+                self.adamw.param_groups[i]['lr'] = group['lr']
+            else:
+                # Update Muon param group
+                self.muon.param_groups[i - adamw_group_count]['lr'] = group['lr']
+
         self.adamw.step()
         self.muon.step()
 

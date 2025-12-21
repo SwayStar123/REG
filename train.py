@@ -109,6 +109,7 @@ def main(args):
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
+        step_scheduler_with_optimizer=False,
         kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=False)]
     )
 
@@ -231,6 +232,28 @@ def main(args):
     else:
         raise ValueError(f"Unsupported optimizer: {args.optimizer}")
     
+    # Setup learning rate scheduler
+    if args.lr_schedule == "constant":
+        lr_scheduler = None
+    elif args.lr_schedule == "exponential":
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            optimizer, gamma=args.lr_decay_rate
+        )
+    elif args.lr_schedule == "constant_with_decay":
+        # Constant LR until last 50k steps, then linear decay to 0
+        def lr_lambda(step):
+            decay_start = args.max_train_steps - 50000
+            if step < decay_start:
+                return 1.0  # Constant LR
+            else:
+                # Linear decay from 1.0 to 0.0 over the last 50k steps
+                progress = (step - decay_start) / 50000.0
+                return max(0.0, 1.0 - progress)
+        
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    else:
+        raise ValueError(f"Unsupported lr_schedule: {args.lr_schedule}")
+    
     # Setup data:
     train_dataset = CustomDataset(args.data_dir)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
@@ -260,12 +283,31 @@ def main(args):
             )
         model.load_state_dict(ckpt['model'])
         ema.load_state_dict(ckpt['ema'])
-        optimizer.load_state_dict(ckpt['opt'])
+        
+        # Load optimizer state
+        if args.reset_optimizer_on_resume:
+            # Don't load optimizer state - start fresh (useful when changing LR schedule)
+            if accelerator.is_main_process:
+                logger.info("Skipping optimizer state loading (reset_optimizer_on_resume=True)")
+        else:
+            optimizer.load_state_dict(ckpt['opt'])
+        
+        if lr_scheduler is not None and 'scheduler' in ckpt:
+            lr_scheduler.load_state_dict(ckpt['scheduler'])
         global_step = ckpt['steps']
 
-    model, optimizer, train_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader
-    )
+    if lr_scheduler is not None:
+        model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            model, optimizer, train_dataloader, lr_scheduler
+        )
+        # If resuming, step the scheduler to the correct position
+        if args.resume_step > 0:
+            for _ in range(global_step):
+                lr_scheduler.step()
+    else:
+        model, optimizer, train_dataloader = accelerator.prepare(
+            model, optimizer, train_dataloader
+        )
 
     if accelerator.is_main_process:
         tracker_config = vars(copy.deepcopy(args))
@@ -353,6 +395,8 @@ def main(args):
                     params_to_clip = model.parameters()
                     grad_norm = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
+                if lr_scheduler is not None:
+                    lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
                 if accelerator.sync_gradients:
@@ -371,6 +415,8 @@ def main(args):
                         "args": args,
                         "steps": global_step,
                     }
+                    if lr_scheduler is not None:
+                        checkpoint["scheduler"] = lr_scheduler.state_dict()
                     checkpoint_path = f"{checkpoint_dir}/{global_step:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
@@ -413,6 +459,18 @@ def main(args):
                 "cfm_loss": accelerator.gather(cfm_loss_mean).mean().detach().item(),
                 "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
             }
+            
+            # Add learning rate to logs
+            if lr_scheduler is not None:
+                if args.optimizer == "muon":
+                    # CombinedOptimizer has multiple param groups: [adamw_groups..., muon_groups...]
+                    # Get the last LR which corresponds to Muon
+                    logs["lr_muon"] = lr_scheduler.get_last_lr()[-1]
+                    logs["lr_adamw"] = lr_scheduler.get_last_lr()[0]
+                else:
+                    logs["lr"] = lr_scheduler.get_last_lr()[0]
+            else:
+                logs["lr"] = args.learning_rate if args.optimizer == "adamw" else args.muon_lr
 
             log_message = ", ".join(f"{key}: {value:.6f}" for key, value in logs.items())
             logging.info(f"Step: {global_step}, Training Logs: {log_message}")
@@ -443,6 +501,7 @@ def parse_args(input_args=None):
     parser.add_argument("--report-to", type=str, default="wandb")
     parser.add_argument("--sampling-steps", type=int, default=2000)
     parser.add_argument("--resume-step", type=int, default=0)
+    parser.add_argument("--reset-optimizer-on-resume", action="store_true", help="Reset optimizer state (momentum buffers) when resuming. Useful when changing LR schedule.")
 
     # model
     parser.add_argument("--model", type=str)
@@ -476,6 +535,8 @@ def parse_args(input_args=None):
     parser.add_argument("--muon-lr", type=float, default=1e-3)
     parser.add_argument("--muon-momentum", type=float, default=0.95)
     parser.add_argument("--muon-weight-decay", type=float, default=0.01, help="Weight decay for the Muon optimizer.")
+    parser.add_argument("--lr-schedule", type=str, default="constant", choices=["constant", "exponential", "constant_with_decay"], help="Learning rate schedule type.")
+    parser.add_argument("--lr-decay-rate", type=float, default=0.99999, help="Decay rate for exponential LR schedule (applied per step).")
 
     # seed
     parser.add_argument("--seed", type=int, default=0)

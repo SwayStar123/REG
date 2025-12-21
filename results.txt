@@ -293,6 +293,15 @@ B/1 @ 400k - 14-16 it/s
                             kd_variance: 0.00433
 
 SR-DiT-B/1 @ 400k:
+    Inception Score: 221.17398071289062
+    FID: 3.490749061364454
+    sFID: 5.670303007342113
+    Precision: 0.8075
+    Recall: 0.5456
+
+    kd_value: 0.33224
+    kd_variance: 0.00645
+
     with Muon lr 2.5 e-4 and wd 0.01:
         Inception Score: 168.8122100830078
         FID: 4.935885383701589
@@ -306,6 +315,34 @@ SR-DiT-B/1 @ 400k:
         sFID: 5.892870832165613
         Precision: 0.80432
         Recall: 0.5477
+
+    with Muon lr 1e-3 and wd 0:
+        Inception Score: 210.24374389648438
+        FID: 3.3967112833663577
+        sFID: 5.577858551462555
+        Precision: 0.79536
+        Recall: 0.5629
+
+        kd_value: 0.31871
+        kd_variance: 0.00663
+
+        with 0.99999 lr decay
+            Inception Score: 169.32968139648438
+            FID: 5.189810854238885
+            sFID: 5.846699239250711
+            Precision: 0.73892
+            Recall: 0.6033
+
+        with last 50k linear decay to 0 (reset optimizer):
+            Inception Score: 200.2843475341797
+            FID: 3.4510072203980826
+            sFID: 5.552056173642313
+            Precision: 0.7648
+            Recall: 0.5977
+
+            kd_value: 0.33440
+            kd_variance: 0.00746
+
 
 512 resolution
     B/1 @ 400k speedrun-dit:
