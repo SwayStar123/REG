@@ -20,7 +20,7 @@ from accelerate.utils import ProjectConfiguration, set_seed
 
 from models.sit import SiT_models
 from loss import SILoss
-from utils import load_encoders
+from utils import load_encoder
 
 from dataset import CustomDataset
 from preprocessing.encoders import load_invae
@@ -30,7 +30,7 @@ import math
 from torchvision.utils import make_grid
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision.transforms import Normalize
-from samplers import euler_maruyama_sampler
+from samplers import euler_maruyama_sampler_path_drop
 from PIL import Image
 
 logger = get_logger(__name__)
@@ -137,13 +137,13 @@ def main(args):
     if args.enc_type != None:
         # Only main process triggers the heavy I/O / download once
         if accelerator.is_main_process:
-            _ = load_encoders(args.enc_type, device, args.resolution)
+            _ = load_encoder(args.enc_type, device, args.resolution)
 
         # Make all processes wait until rank 0 is done
         accelerator.wait_for_everyone()
 
         # Now everyone can safely load from cache (or do whatever)
-        encoders, encoder_types, architectures = load_encoders(
+        encoder, encoder_type, architecture = load_encoder(
             args.enc_type, device, args.resolution
         )
     else:
@@ -164,14 +164,14 @@ def main(args):
     latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
-    z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
+    z_dim = encoder.embed_dim if args.enc_type != 'None' else 0
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
         input_size=latent_size,
         in_channels=channels,
         num_classes=args.num_classes,
         use_cfg = (args.cfg_prob > 0),
-        z_dims = z_dims,
+        z_dim = z_dim,
         **block_kwargs
     )
 
@@ -184,7 +184,7 @@ def main(args):
     loss_fn = SILoss(
         prediction=args.prediction,
         path_type=args.path_type, 
-        encoders=encoders,
+        encoder=encoder,
         accelerator=accelerator,
         weighting=args.weighting,
         cfm_weighting=args.cfm_weighting,
@@ -275,7 +275,7 @@ def main(args):
     # Create sampling noise:
     n = ys.size(0)
     xT = torch.randn((n, channels, latent_size, latent_size), device=device)
-    cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+    cls_z = torch.randn((n, encoder.embed_dim), device=device)
     
     if accelerator.is_main_process:
         sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
@@ -298,22 +298,20 @@ def main(args):
                 labels = y
             with torch.no_grad():
                 x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
-                zs = []
                 with accelerator.autocast():
-                    for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
-                        raw_image_ = preprocess_raw_image(raw_image, encoder_type)
-                        z = encoder.forward_features(raw_image_)
-                        if 'dinov2' in encoder_type:
-                            dense_z = z['x_norm_patchtokens']
-                            cls_token = z['x_norm_clstoken']
-                            dense_z = torch.cat([cls_token.unsqueeze(1), dense_z], dim=1)
-                        else:
-                            exit()
-                        zs.append(dense_z)
+                    raw_image_ = preprocess_raw_image(raw_image, encoder_type)
+                    z = encoder.forward_features(raw_image_)
+                    if 'dinov2' in encoder_type:
+                        dense_z = z['x_norm_patchtokens']
+                        cls_token = z['x_norm_clstoken']
+                        dense_z = torch.cat([cls_token.unsqueeze(1), dense_z], dim=1)
+                    else:
+                        exit()
+                    z = dense_z
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
-                loss1, proj_loss1, time_input, noises, loss2, cfm_loss, cfm_loss_cls = loss_fn(model, x, model_kwargs, zs=zs,
+                loss1, proj_loss1, time_input, noises, loss2, cfm_loss, cfm_loss_cls = loss_fn(model, x, model_kwargs, z=z,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
@@ -365,7 +363,7 @@ def main(args):
                         cls_latents=cls_z.clone(),
                         args=args,
                     )
-                samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
+                samples = euler_maruyama_sampler_path_drop(**sampling_kwargs).to(torch.float32)
 
                 samples = vae.decode((samples - latents_bias) / latents_scale).sample
 
@@ -471,11 +469,11 @@ def parse_args(input_args=None):
     parser.add_argument("--shift-base", type=int, default=4096)
 
     # sampling specific
-    parser.add_argument("--cfg-scale", type=float, default=4.0, help="Classifier-free guidance scale for in-training sampling.")
-    parser.add_argument("--cls-cfg-scale", type=float, default=1.0, help="CLS guidance scale (used inside sampler).")
+    parser.add_argument("--cfg-scale", type=float, default=2.5, help="Classifier-free guidance scale for in-training sampling.")
+    parser.add_argument("--cls-cfg-scale", type=float, default=2.5, help="CLS guidance scale (used inside sampler).")
     parser.add_argument("--guidance-low", type=float, default=0.0)
-    parser.add_argument("--guidance-high", type=float, default=1.0)
-    parser.add_argument("--num-sample-steps", type=int, default=50, help="Diffusion sampling steps for in-training sampling.")
+    parser.add_argument("--guidance-high", type=float, default=0.9)
+    parser.add_argument("--num-sample-steps", type=int, default=250, help="Diffusion sampling steps for in-training sampling.")
 
     if input_args is not None:
         args = parser.parse_args(input_args)

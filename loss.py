@@ -15,6 +15,16 @@ def sum_flat(x):
     """
     return torch.sum(x, dim=list(range(1, len(x.size()))))
 
+# Suggested by iREPA for dino features
+def spatial_norm_tokens(x, gamma=1.0, eps=1e-6):
+    """
+    x: (B, T, D)
+    """
+    x = x - gamma * x.mean(dim=1, keepdim=True)
+    x = x / (x.std(dim=1, keepdim=True, unbiased=False) + eps)
+    return x
+
+
 class SILoss:
     def __init__(
             self,
@@ -22,7 +32,7 @@ class SILoss:
             path_type="linear",
             weighting="uniform",
             cfm_weighting="uniform",
-            encoders=[], 
+            encoder=None, 
             accelerator=None, 
             apply_time_shift=False,
             shift_base=4096,
@@ -30,7 +40,7 @@ class SILoss:
         self.prediction = prediction
         self.weighting = weighting
         self.path_type = path_type
-        self.encoders = encoders
+        self.encoder = encoder
         self.accelerator = accelerator
         self.cfm_weighting = cfm_weighting
         self.apply_time_shift = apply_time_shift
@@ -52,7 +62,7 @@ class SILoss:
 
         return alpha_t, sigma_t, d_alpha_t, d_sigma_t
 
-    def __call__(self, model, images, model_kwargs=None, zs=None, cls_token=None,
+    def __call__(self, model, images, model_kwargs=None, z=None, cls_token=None,
                  time_input=None, noises=None,):
         if model_kwargs == None:
             model_kwargs = {}
@@ -91,7 +101,7 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
+        model_output, z_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
                                                     cls_token=cls_input)
 
         #denoising_loss
@@ -100,13 +110,16 @@ class SILoss:
 
         # projection loss
         proj_loss = 0.
-        bsz = zs[0].shape[0]
-        for i, (z, z_tilde) in enumerate(zip(zs, zs_tilde)):
-            for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
-                z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1) 
-                z_j = torch.nn.functional.normalize(z_j, dim=-1) 
-                proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
-        proj_loss /= (len(zs) * bsz)
+        bsz = z.shape[0]
+        for i, (z_i, z_tilde_i) in enumerate(zip(z, z_tilde)):
+            z_tilde_i = torch.nn.functional.normalize(z_tilde_i, dim=-1)
+
+            if i != 0: # Spatial norm only for non-cls tokens
+                z_i = spatial_norm_tokens(z_i, gamma=1.0)
+            z_i = torch.nn.functional.normalize(z_i, dim=-1)
+
+            proj_loss += mean_flat(-(z_i * z_tilde_i).sum(dim=-1))
+        proj_loss /= (bsz)
 
         cfm_target = torch.roll(model_target, shifts=1, dims=0)
         cfm_target_cls = torch.roll(cls_target, shifts=1, dims=0)

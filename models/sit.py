@@ -282,7 +282,7 @@ class SiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         use_cfg=False,
-        z_dims=[768],
+        z_dim=768,
         projector_dim=2048,
         cls_token_dim=768,
         **block_kwargs # fused_attn
@@ -295,7 +295,7 @@ class SiT(nn.Module):
         self.num_heads = num_heads
         self.use_cfg = use_cfg
         self.num_classes = num_classes
-        self.z_dims = z_dims
+        self.z_dim = z_dim
         self.encoder_depth = encoder_depth
         self.depth = depth
 
@@ -341,16 +341,14 @@ class SiT(nn.Module):
                 )
             )
         self.blocks = nn.ModuleList(blocks)
-        self.projectors = nn.ModuleList([
-            build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
-            ])
 
-        z_dim = self.z_dims[0]
-        cls_token_dim = z_dim
+        self.projector = nn.Conv2d(hidden_size, self.z_dim, kernel_size=3, padding=1, bias=True) # iREPA replaces MLP projector with conv
+
+        cls_token_dim = self.z_dim
         self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
 
-
-        self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
+        self.cls_projector1 = build_mlp(hidden_size, projector_dim, cls_token_dim)
+        self.cls_projector2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
         self.wg_norm = nn.RMSNorm(hidden_size, elementwise_affine=True, eps=1e-6)
 
         # RoPE for spatial tokens
@@ -367,7 +365,7 @@ class SiT(nn.Module):
     def initialize_weights(self):
         # Initialize transformer layers:
         def _basic_init(module):
-            if isinstance(module, nn.Linear):
+            if isinstance(module, (nn.Linear, nn.Conv2d)):
                 torch.nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
@@ -489,7 +487,7 @@ class SiT(nn.Module):
 
         # cls_token is expected (for your current pipeline)
         if cls_token is not None:
-            cls_token = self.cls_projectors2(cls_token)
+            cls_token = self.cls_projector2(cls_token)
             cls_token = self.wg_norm(cls_token)
             cls_token = cls_token.unsqueeze(1)  # [B, 1, D]
             x = torch.cat((cls_token, x), dim=1)
@@ -528,11 +526,12 @@ class SiT(nn.Module):
             if v1_full is None:
                 v1_full = self.blocks[i].attn.v_last
 
-        # Use encoder output for z-projections (REPA / SPRINT z_t)
-        zs = [
-            projector(x_enc.reshape(-1, D)).reshape(N, -1, z_dim)
-            for projector, z_dim in zip(self.projectors, self.z_dims)
-        ]
+        # Conv for patch tokens, cls_projector1 for cls token
+        x_patch = x_enc[:, 1:, :]          # (N, HW, D)
+        x_grid  = x_patch.transpose(1, 2).reshape(N, D, hw, hw)  # (N, D, H, W)
+        z = self.projector(x_grid).flatten(2).transpose(1, 2)              # (N, HW, z_dim)
+        z_cls = self.cls_projector1(x_enc[:, 0, :]).unsqueeze(1)
+        z = torch.cat([z_cls, z], dim=1)
 
         # ------------------------------------------------------------------
         # 2) Drop tokens to build sparse input to gθ (SPRINT sparse path)
@@ -602,7 +601,7 @@ class SiT(nn.Module):
         x_out = self.unpatchify(x_out)
 
         # ids_keep lets you inspect which tokens were kept; ignore it if you don't need it.
-        return x_out, zs, cls_token_out
+        return x_out, z, cls_token_out
 
 
 #################################################################################

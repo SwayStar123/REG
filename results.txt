@@ -292,6 +292,68 @@ B/1 @ 400k - 14-16 it/s
                             kd_value: 0.24835
                             kd_variance: 0.00433
 
+SR-DiT_9:
+    B/1 @ 400k:
+        Inception Score: 221.17398071289062
+        FID: 3.490749061364454
+        sFID: 5.670303007342113
+        Precision: 0.8075
+        Recall: 0.5456
+
+        kd_value: 0.33224
+        kd_variance: 0.00645
+
+        with iREPA:
+            Inception Score: 217.8775177001953
+            FID: 3.5646374519525352
+            sFID: 5.66355576272656
+            Precision: 0.80552
+            Recall: 0.5474
+
+            kd_value: 0.33122
+            kd_variance: 0.00698
+
+            with MLP for cls token: - 145M
+                Inception Score: 212.79763793945312
+                FID: 3.476984984273315
+                sFID: 5.401183342911281
+                Precision: 0.79334
+                Recall: 0.5656
+
+                kd_value: 0.34578
+                kd_variance: 0.00722
+
+                with DinoV2-L:
+                    Inception Score: 209.7556610107422
+                    FID: 3.773575456274216
+                    sFID: 5.398047283552387
+                    Precision: 0.78872
+                    Recall: 0.5491
+
+                    kd_value: 0.34992
+                    kd_variance: 0.00709
+                    
+
+        switch DinoV2-B with DinoV2-S:
+            Inception Score: 205.0876922607422
+            FID: 3.4894167687779714
+            sFID: 5.865552954766372
+            Precision: 0.79042
+            Recall: 0.5628
+
+            kd_value: 0.34318
+            kd_variance: 0.00810
+
+            with iREPA:
+                Inception Score: 192.408935546875
+                FID: 4.030752880455566
+                sFID: 5.949278027862988
+                Precision: 0.76836
+                Recall: 0.5856
+
+                kd_value: 0.37389
+                kd_variance: 0.00857
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344

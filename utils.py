@@ -24,51 +24,43 @@ def download_model(model_name):
 
 
 @torch.no_grad()
-def load_encoders(enc_type, device, resolution=256):
+def load_encoder(enc_type, device, resolution=256):
     assert (resolution == 256) or (resolution == 512)
     
-    enc_names = enc_type.split(',')
-    encoders, architectures, encoder_types = [], [], []
-    for enc_name in enc_names:
-        encoder_type, architecture, model_config = enc_name.split('-')
-        # Currently, we only support 512x512 experiments with DINOv2 encoders.
-        if resolution == 512:
-            if encoder_type != 'dinov2':
-                raise NotImplementedError(
-                    "Currently, we only support 512x512 experiments with DINOv2 encoders."
-                    )
+    encoder_type, architecture, model_config = enc_type.split('-')
+    # Currently, we only support 512x512 experiments with DINOv2 encoders.
+    if resolution == 512:
+        if encoder_type != 'dinov2':
+            raise NotImplementedError(
+                "Currently, we only support 512x512 experiments with DINOv2 encoders."
+                )
 
-        architectures.append(architecture)
-        encoder_types.append(encoder_type)
+    if 'dinov2' in encoder_type:
+        import timm
+        if 'reg' in encoder_type:
+            try:
+                encoder = torch.hub.load('your_path/.cache/torch/hub/facebookresearch_dinov2_main',
+                                        f'dinov2_vit{model_config}14_reg', source='local')
+            except:
+                encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_config}14_reg')
+        else:
+            try:
+                encoder = torch.hub.load('your_path/.cache/torch/hub/facebookresearch_dinov2_main',
+                                         f'dinov2_vit{model_config}14', source='local')
+            except:
+                encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_config}14')
 
-        if 'dinov2' in encoder_type:
-            import timm
-            if 'reg' in encoder_type:
-                try:
-                    encoder = torch.hub.load('your_path/.cache/torch/hub/facebookresearch_dinov2_main',
-                                            f'dinov2_vit{model_config}14_reg', source='local')
-                except:
-                    encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_config}14_reg')
-            else:
-                try:
-                    encoder = torch.hub.load('your_path/.cache/torch/hub/facebookresearch_dinov2_main',
-                                             f'dinov2_vit{model_config}14', source='local')
-                except:
-                    encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_config}14')
+        print(f"Now you are using the {enc_type} as the aligning model")
+        del encoder.head
+        patch_resolution = 16 * (resolution // 256)
+        encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
+            encoder.pos_embed.data, [patch_resolution, patch_resolution],
+        )
+        encoder.head = torch.nn.Identity()
+        encoder = encoder.to(device)
+        encoder.eval()
 
-            print(f"Now you are using the {enc_name} as the aligning model")
-            del encoder.head
-            patch_resolution = 16 * (resolution // 256)
-            encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
-                encoder.pos_embed.data, [patch_resolution, patch_resolution],
-            )
-            encoder.head = torch.nn.Identity()
-            encoder = encoder.to(device)
-            encoder.eval()
-
-        encoders.append(encoder)
-    
-    return encoders, encoder_types, architectures
+    return encoder, encoder_type, architecture
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
