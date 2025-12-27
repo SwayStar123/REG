@@ -313,7 +313,7 @@ SR-DiT_9:
             kd_value: 0.33122
             kd_variance: 0.00698
 
-            with MLP for cls token: - 145M
+            with MLP for cls token: -  145,544,235 params
                 Inception Score: 212.79763793945312
                 FID: 3.476984984273315
                 sFID: 5.401183342911281
@@ -322,6 +322,13 @@ SR-DiT_9:
 
                 kd_value: 0.34578
                 kd_variance: 0.00722
+
+                with increase repa coeff to 1.0, spatial norm gamma to 0.6:
+                    Inception Score: 192.75132751464844
+                    FID: 4.232689681598174
+                    sFID: 5.8659058428761455
+                    Precision: 0.77526
+                    Recall: 0.5664
 
                 with DinoV2-L:
                     Inception Score: 209.7556610107422

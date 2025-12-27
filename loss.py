@@ -16,7 +16,7 @@ def sum_flat(x):
     return torch.sum(x, dim=list(range(1, len(x.size()))))
 
 # Suggested by iREPA for dino features
-def spatial_norm_tokens(x, gamma=1.0, eps=1e-6):
+def spatial_norm_tokens(x, gamma=0.6, eps=1e-6):
     """
     x: (B, T, D)
     """
@@ -115,7 +115,7 @@ class SILoss:
             z_tilde_i = torch.nn.functional.normalize(z_tilde_i, dim=-1)
 
             if i != 0: # Spatial norm only for non-cls tokens
-                z_i = spatial_norm_tokens(z_i, gamma=1.0)
+                z_i = spatial_norm_tokens(z_i)
             z_i = torch.nn.functional.normalize(z_i, dim=-1)
 
             proj_loss += mean_flat(-(z_i * z_tilde_i).sum(dim=-1))

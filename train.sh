@@ -11,9 +11,9 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --weighting="uniform" \
     --model="SiT-B/1" \
     --enc-type="dinov2-vit-b" \
-    --proj-coeff=0.5 \
+    --proj-coeff=1.0 \
     --output-dir="exps" \
-    --exp-name="b1-srdit-9+irepa-mlp-for-cls" \
+    --exp-name="b1-srdit-9+1.0irepa-mlp-for-cls" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
