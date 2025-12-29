@@ -292,6 +292,47 @@ B/1 @ 400k - 14-16 it/s
                             kd_value: 0.24835
                             kd_variance: 0.00433
 
+SR-DiT-9:
+    Inception Score: 221.17398071289062
+    FID: 3.490749061364454
+    sFID: 5.670303007342113
+    Precision: 0.8075
+    Recall: 0.5456
+
+    kd_value: 0.33224
+    kd_variance: 0.00645
+
+    with fixing encoder depth to 4:
+        Inception Score: 244.70986938476562
+        FID: 3.6174404183186653
+        sFID: 5.514214046723055
+        Precision: 0.83158
+        Recall: 0.5254
+
+        kd_value: 0.28803
+        kd_variance: 0.00545
+
+    with DINO layer index 9:
+        Inception Score: 237.1304473876953
+        FID: 3.8031242540280914
+        sFID: 5.268854347018987
+        Precision: 0.83778
+        Recall: 0.5132
+
+        kd_value: 0.28858
+        kd_variance: 0.00543
+
+    with aligning dino layer 9, 12 to model layer 2, 4:
+        Inception Score: 243.3607635498047
+        FID: 3.3545035826538196
+        sFID: 5.5528682382210945
+        Precision: 0.82306
+        Recall: 0.5418
+
+        kd_value: 0.29629
+        kd_variance: 0.00567
+       
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344

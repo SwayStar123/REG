@@ -62,12 +62,32 @@ def main(args):
     # Load model:
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     latent_size = args.resolution // 16  # invae uses 16x downsampling
+
+    # Default encoder depths (total layer indices) per model. These mirror the
+    # training defaults: XL/L use depth 8, B/S use depth 2.
+    default_encoder_depths = {
+        "SiT-XL/1": 8, "SiT-XL/2": 8, "SiT-XL/4": 8,
+        "SiT-L/1": 8,  "SiT-L/2":  8, "SiT-L/4":  8,
+        "SiT-B/1": 2,  "SiT-B/2":  2, "SiT-B/4":  2,
+        "SiT-S/1": 2,  "SiT-S/2":  2, "SiT-S/4":  2,
+    }
+
+    if args.encoder_depth is None:
+        if args.model not in default_encoder_depths:
+            raise ValueError(f"No default encoder_depth configured for model {args.model}")
+        encoder_depth = default_encoder_depths[args.model]
+    else:
+        encoder_depth = list(args.encoder_depth)
+
+    args.encoder_depth = encoder_depth
+
     model = SiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes,
         in_channels=32,
         use_cfg = True,
-        z_dims = [int(z_dim) for z_dim in args.projector_embed_dims.split(',')],
+        z_dim = int(args.projector_embed_dim),
+        encoder_depth=encoder_depth,
         **block_kwargs,
     ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
@@ -78,8 +98,7 @@ def main(args):
     if ckpt_path is None:
         args.ckpt = 'SiT-XL-2-256x256.pt'
         assert args.model == 'SiT-XL/2'
-        assert len(args.projector_embed_dims.split(',')) == 1
-        assert int(args.projector_embed_dims.split(',')[0]) == 768
+        assert int(args.projector_embed_dim) == 768
         state_dict = download_model('last.pt')
     else:
         state_dict = torch.load(ckpt_path, map_location=f'cuda:{device}', weights_only=False)['ema']
@@ -138,7 +157,7 @@ def main(args):
     if rank == 0 and need_sampling:
         print(f"Total number of images that will be sampled: {total_samples}")
         print(f"SiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"projector Parameters: {sum(p.numel() for p in model.projectors.parameters()):,}")
+        print(f"projector Parameters: {sum(p.numel() for p in model.projector.parameters()):,}")
     assert total_samples % dist.get_world_size() == 0, "total_samples must be divisible by world_size"
     samples_needed_this_gpu = int(total_samples // dist.get_world_size())
     assert samples_needed_this_gpu % n == 0, "samples_needed_this_gpu must be divisible by the per-GPU batch size"
@@ -239,7 +258,10 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, default="ode")
     parser.add_argument("--cfg-scale",  type=float, default=1.5)
     parser.add_argument("--cls-cfg-scale",  type=float, default=1.5)
-    parser.add_argument("--projector-embed-dims", type=str, default="768,1024")
+    parser.add_argument("--projector-embed-dim", type=int, default=768)
+    parser.add_argument("--encoder-depth", type=int, nargs="+", default=None,
+                        help="List of encoder depths (total layer indices) used during training. "
+                             "If omitted, uses per-model defaults (8 for XL/L, 2 for B/S).")
     parser.add_argument("--path-type", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument("--num-steps", type=int, default=50)
     parser.add_argument("--heun", action=argparse.BooleanOptionalAction, default=False) # only for ode

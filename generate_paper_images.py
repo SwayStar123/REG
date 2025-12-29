@@ -35,7 +35,7 @@ def load_models(args, device):
         num_classes=args.num_classes,
         in_channels=32,
         use_cfg=True,
-        z_dims=[int(z_dim) for z_dim in args.projector_embed_dims.split(",")],
+        z_dim=int(args.projector_embed_dim),
         **block_kwargs,
     ).to(device)
 
@@ -43,8 +43,7 @@ def load_models(args, device):
     if ckpt_path is None:
         args.ckpt = "SiT-XL-2-256x256.pt"
         assert args.model == "SiT-XL/2"
-        assert len(args.projector_embed_dims.split(",")) == 1
-        assert int(args.projector_embed_dims.split(",")[0]) == 768
+        assert int(args.projector_embed_dim) == 768
         state_dict = download_model("last.pt")
     else:
         state_dict = torch.load(ckpt_path, map_location=device, weights_only=False)["ema"]
@@ -172,7 +171,7 @@ def main():
     parser.add_argument("--mode", type=str, default="sde")
     parser.add_argument("--cfg-scale", type=float, default=2.5)
     parser.add_argument("--cls-cfg-scale", type=float, default=2.5)
-    parser.add_argument("--projector-embed-dims", type=str, default="768")
+    parser.add_argument("--projector-embed-dim", type=int, default=768)
     parser.add_argument("--path-type", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument("--heun", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--guidance-low", type=float, default=0.2)
