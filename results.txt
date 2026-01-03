@@ -322,7 +322,7 @@ SR-DiT-9:
         kd_value: 0.28858
         kd_variance: 0.00543
 
-    with aligning dino layer 9, 12 to model layer 2, 4:
+    with model layer 2, 4 to dino layer 9, 12:
         Inception Score: 243.3607635498047
         FID: 3.3545035826538196
         sFID: 5.5528682382210945
@@ -332,6 +332,25 @@ SR-DiT-9:
         kd_value: 0.29629
         kd_variance: 0.00567
        
+    with model layer  2, 4 to dino layer 12, 12:
+        Inception Score: 231.5462646484375
+        FID: 3.2885580027265746
+        sFID: 5.567918971200015
+        Precision: 0.81546
+        Recall: 0.547
+
+        kd_value: 0.30769
+        kd_variance: 0.00611
+
+    with model layer 2, 4, 6 to dino layer 12:
+        Inception Score: 239.3628387451172
+        FID: 3.2996543157512974
+        sFID: 5.399184413753005
+        Precision: 0.82004
+        Recall: 0.5486
+
+        kd_value: 0.29817
+        kd_variance: 0.00557
 
 512 resolution
     B/1 @ 400k speedrun-dit:

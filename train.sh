@@ -13,13 +13,14 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-aligndino9,12to2,4" \
+    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-aligndino12to2,4,6" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
     --cfm-weighting="uniform" \
     --cfm-coeff=0.05 \
-    --dino-layer-index 9 12 \
-    --encoder-depth 2 4 \
+    --dino-layer-index 12 12 12 \
+    --encoder-depth 2 4 6 \
+    --resume-step 210000
     
