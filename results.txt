@@ -352,6 +352,26 @@ SR-DiT-9:
         kd_value: 0.29817
         kd_variance: 0.00557
 
+SR-DiT-10:
+    Inception Score: 239.3628387451172
+    FID: 3.2996543157512974
+    sFID: 5.399184413753005
+    Precision: 0.82004
+    Recall: 0.5486
+
+    kd_value: 0.29817
+    kd_variance: 0.00557
+
+        switch VAE to flux2 vae:
+            Inception Score: 219.0271759033203
+            FID: 3.712342638240159
+            sFID: 6.175990485123862
+            Precision: 0.79306
+            Recall: 0.5508
+
+            kd_value: 0.30538
+            kd_variance: 0.00655
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344

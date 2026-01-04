@@ -14,7 +14,7 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 import torch
 import torch.distributed as dist
 from models.sit import SiT_models
-from preprocessing.encoders import load_invae
+from preprocessing.encoders import load_invae, load_flux2_vae
 from tqdm import tqdm
 import os
 from PIL import Image
@@ -61,7 +61,18 @@ def main(args):
 
     # Load model:
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
-    latent_size = args.resolution // 16  # invae uses 16x downsampling
+    
+    # Detect which VAE to use based on vae_name
+    is_flux_vae = 'flux' in args.vae_name.lower() or 'black-forest-labs' in args.vae_name.lower()
+    
+    if is_flux_vae:
+        channels = 32  # FLUX.2 VAE uses 32 latent channels
+        scaling_factor = 0.570  # Empirical scaling factor to normalize latents to std=1.0
+        latent_size = args.resolution // 8  # FLUX.2 VAE uses 8x downsampling
+    else:
+        channels = 32  # invae uses 32 channels
+        scaling_factor = 0.3099  # invae uses 0.3099 scaling factor
+        latent_size = args.resolution // 16  # invae uses 16x downsampling
 
     # Default encoder depths (total layer indices) per model. These mirror the
     # training defaults: XL/L use depth 8, B/S use depth 2.
@@ -84,7 +95,7 @@ def main(args):
     model = SiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes,
-        in_channels=32,
+        in_channels=channels,
         use_cfg = True,
         z_dim = int(args.projector_embed_dim),
         encoder_depth=encoder_depth,
@@ -112,15 +123,26 @@ def main(args):
 
 
     model.eval()  # important!
-    # Load invae model using load_invae function
-    vae = load_invae("REPA-E/e2e-invae").to(device)
+    
+    # Load VAE model based on vae_name
+    if is_flux_vae:
+        vae = load_flux2_vae(args.vae_name, device=device)
+        vae_type = "Flux 2 VAE"
+    else:
+        vae = load_invae(args.vae_name, device=device)
+        vae_type = "INVAE"
+    
     vae.eval().requires_grad_(False)
+    
+    if rank == 0:
+        print(f"Using {vae_type} ({args.vae_name}) with {channels} channels and scaling factor {scaling_factor}")
 
 
     # Create folder to save samples:
     model_string_name = args.model.replace("/", "-")
     ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
-    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-invae-" \
+    vae_string_name = "flux2" if is_flux_vae else "invae"
+    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.resolution}-vae-{vae_string_name}-" \
                   f"cfg-{args.cfg_scale}-seed-{args.global_seed}-{args.mode}-{args.guidance_high}-{args.cls_cfg_scale}-pathdrop-{args.path_drop}"
     if args.balanced_sampling:
         folder_name += "-balanced"
@@ -205,8 +227,7 @@ def main(args):
                 else:
                     raise NotImplementedError()
 
-                # For invae, apply 0.3099 scaling factor
-                scaling_factor = 0.3099
+                # Apply the appropriate scaling factor for the VAE
                 samples = vae.decode(samples / scaling_factor).sample
                 samples = (samples + 1) / 2.
                 samples = torch.clamp(
@@ -244,6 +265,8 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, choices=list(SiT_models.keys()), default="SiT-XL/2")
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
+    parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae",
+                        help="VAE model name. Use 'REPA-E/e2e-invae' for INVAE or 'black-forest-labs/FLUX.2-dev' for Flux 2 VAE")
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=False)
 

@@ -1,13 +1,13 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-aligndino12to2,4,6"
+SAVE_PATH="exps/srdit-10-flux2vae"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
-PATCH_SIZE=1
+PATCH_SIZE=2
 PATH_DROP=True
 export NCCL_P2P_DISABLE=1
 
@@ -26,11 +26,13 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
   --qk-norm \
-  --encoder-depth 2 4 
+  --encoder-depth 2 4 6 \
+  --vae-name="black-forest-labs/FLUX.2-dev"
+
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \
-    --sample_batch ${SAVE_PATH}/checkpoints/SiT-${MODEL_SIZE}-${PATCH_SIZE}-${STEP}-size-256-vae-invae-cfg-${CFG_SCALE}-seed-0-sde-${GH}-${CLS_CFG_SCALE}-pathdrop-${PATH_DROP}-balanced.npz \
+    --sample_batch ${SAVE_PATH}/checkpoints/SiT-${MODEL_SIZE}-${PATCH_SIZE}-${STEP}-size-256-vae-flux2-cfg-${CFG_SCALE}-seed-0-sde-${GH}-${CLS_CFG_SCALE}-pathdrop-${PATH_DROP}-balanced.npz \
     --save_path ${SAVE_PATH}/checkpoints \
     --cfg_cond 1 \
     --step ${STEP} \
