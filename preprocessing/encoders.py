@@ -83,6 +83,41 @@ class InvaeEncoder(Encoder):
         return x
 
 #----------------------------------------------------------------------------
+# Pre-trained Flux 2 VAE encoder.
+
+@persistence.persistent_class
+class Flux2VaeEncoder(Encoder):
+    def __init__(self,
+        vae_name    = 'black-forest-labs/FLUX.2-dev',  # Name of the Flux model to use.
+        batch_size  = 8,                                # Batch size to use when running the VAE.
+    ):
+        super().__init__()
+        self.vae_name = vae_name
+        self.batch_size = int(batch_size)
+        self._vae = None
+
+    def init(self, device): # force lazy init to happen now
+        super().init(device)
+        if self._vae is None:
+            self._vae = load_flux2_vae(self.vae_name, device=device)
+        else:
+            self._vae.to(device)
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _vae=None) # do not pickle the vae
+
+    def _run_vae_encoder(self, x):
+        # Flux 2 VAE encode() returns a distribution, we sample from it
+        posterior = self._vae.encode(x).latent_dist
+        return posterior.sample()
+
+    def encode(self, x): # raw pixels => raw latents
+        self.init(x.device)
+        x = x.to(torch.float32) / 127.5 - 1
+        x = torch.cat([self._run_vae_encoder(batch) for batch in x.split(self.batch_size)])
+        return x
+
+#----------------------------------------------------------------------------
 
 def load_invae(vae_name="REPA-E/e2e-invae", device=torch.device('cpu')):
     import os, sys
@@ -115,5 +150,35 @@ def load_invae(vae_name="REPA-E/e2e-invae", device=torch.device('cpu')):
     vae = VAE_F16D32().to(device)
     vae.load_state_dict(torch.load(vae_path, map_location=device))
     return vae.eval().requires_grad_(False).to(device)
+
+#----------------------------------------------------------------------------
+
+def load_flux2_vae(vae_name="black-forest-labs/FLUX.2-dev", device=torch.device('cpu')):
+    """Load Flux 2 VAE from HuggingFace.
+    
+    Args:
+        vae_name: HuggingFace model name (e.g., 'black-forest-labs/FLUX.2-dev')
+        device: Device to load the model on
+    
+    Returns:
+        Flux 2 VAE model in eval mode
+    """
+    try:
+        from diffusers import AutoencoderKLFlux2
+    except ImportError:
+        raise ImportError(
+            "diffusers library is required to use Flux 2 VAE. "
+            "Install it with: pip install diffusers"
+        )
+    
+    # Load the VAE from HuggingFace
+    print(f"Loading Flux 2 VAE from {vae_name}...")
+    vae = AutoencoderKLFlux2.from_pretrained(
+        vae_name,
+        subfolder="vae",
+        torch_dtype=torch.float32,
+    ).to(device)
+    
+    return vae.eval().requires_grad_(False)
 
 #----------------------------------------------------------------------------

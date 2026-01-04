@@ -23,7 +23,7 @@ import PIL.Image
 import torch
 from tqdm import tqdm
 
-from encoders import InvaeEncoder
+from encoders import InvaeEncoder, Flux2VaeEncoder
 
 #----------------------------------------------------------------------------
 
@@ -262,8 +262,13 @@ def encode_image_worker(args):
     gpu_id, batch_data, model_url = args
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
-    # Use InvaeEncoder which returns sampled latents directly
-    vae = InvaeEncoder(vae_name=model_url, batch_size=1)
+    # Determine which encoder to use based on model_url
+    if 'flux' in model_url.lower() or 'black-forest-labs' in model_url.lower():
+        vae = Flux2VaeEncoder(vae_name=model_url, batch_size=1)
+    else:
+        # Use InvaeEncoder which returns sampled latents directly
+        vae = InvaeEncoder(vae_name=model_url, batch_size=1)
+    
     results = []
     
     for idx, image_data in batch_data:
@@ -441,7 +446,7 @@ def convert(
 #----------------------------------------------------------------------------
 
 @cmdline.command()
-@click.option('--model-url',  help='VAE encoder model', metavar='URL',                  type=str, default='REPA-E/e2e-invae', show_default=True)
+@click.option('--model-url',  help='VAE encoder model (e.g., REPA-E/e2e-invae or black-forest-labs/FLUX.2-dev)', metavar='URL', type=str, default='REPA-E/e2e-invae', show_default=True)
 @click.option('--source',     help='Input directory or archive name', metavar='PATH',   type=str, required=True)
 @click.option('--dest',       help='Output directory or archive name', metavar='PATH',  type=str, required=True)
 @click.option('--max-images', help='Maximum number of images to output', metavar='INT', type=int)
@@ -458,6 +463,10 @@ def encode(
 ):
     """Encode pixel data to VAE latents.
     
+    Supports multiple VAE encoders:
+    - InVAE: Use --model-url=REPA-E/e2e-invae (default)
+    - Flux 2 VAE: Use --model-url=black-forest-labs/FLUX.2-dev
+    
     Parallelization and Memory Management:
     
     Use --gpus to control the number of GPUs used for parallel encoding
@@ -466,10 +475,16 @@ def encode(
     GPUs in round-robin fashion and processed in batches to avoid loading
     all images into memory at once.
     
-    Example:
+    Examples:
     \b
+    # Using InVAE (default)
     python dataset_tool.py encode --source=datasets/img64.zip \\
         --dest=datasets/img64_encoded.zip --gpus=8 --batch-size=50
+    
+    # Using Flux 2 VAE
+    python dataset_tool.py encode --source=datasets/img64.zip \\
+        --dest=datasets/img64_flux2_encoded.zip \\
+        --model-url=black-forest-labs/FLUX.2-dev --gpus=8 --batch-size=50
     """
     PIL.Image.init()
     if dest == '':

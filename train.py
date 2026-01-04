@@ -23,7 +23,7 @@ from loss import SILoss
 from utils import load_encoder
 
 from dataset import CustomDataset
-from preprocessing.encoders import load_invae
+from preprocessing.encoders import load_invae, load_flux2_vae
 # import wandb_utils
 import wandb
 import math
@@ -131,8 +131,7 @@ def main(args):
         set_seed(args.seed + accelerator.process_index)
     
     # Create model:
-    assert args.resolution % 16 == 0, "Image size must be divisible by 16 (for the invae encoder)."
-    latent_size = args.resolution // 16  # invae uses 16x downsampling
+    assert args.resolution % 16 == 0, "Image size must be divisible by 16 (for the vae/patchification)."
 
     if args.enc_type != None:
         # Only main process triggers the heavy I/O / download once
@@ -149,20 +148,38 @@ def main(args):
     else:
         raise NotImplementedError()
 
-    # Load custom invae model
+    # Load VAE model - detect which VAE to use based on vae_name
+    is_flux_vae = 'flux' in args.vae_name.lower() or 'black-forest-labs' in args.vae_name.lower()
+    
     if accelerator.is_main_process:
-        _ = load_invae(args.vae_name, device=device)
+        if is_flux_vae:
+            _ = load_flux2_vae(args.vae_name, device=device)
+        else:
+            _ = load_invae(args.vae_name, device=device)
 
     # Make all processes wait until rank 0 is done
     accelerator.wait_for_everyone()
-    vae = load_invae(args.vae_name, device=device)
-    vae.eval().requires_grad_(False)
-    channels = 32  # invae uses 32 channels
     
-    # invae uses 0.3099 scaling factor
-    scaling_factor = 0.3099
+    if is_flux_vae:
+        vae = load_flux2_vae(args.vae_name, device=device)
+        channels = 32  # FLUX.2 VAE uses 32 latent channels (same as InVAE)
+        # FLUX.2 config has scaling_factor=0.18215 but empirically std=1.753
+        # To normalize to std=1.0: 1/1.753 ≈ 0.570
+        scaling_factor = 0.570  # Empirical scaling factor to normalize latents to std=1.0
+        latent_size = args.resolution // 8
+    else:
+        vae = load_invae(args.vae_name, device=device)
+        channels = 32  # invae uses 32 channels
+        scaling_factor = 0.3099  # invae uses 0.3099 scaling factor
+        latent_size = args.resolution // 16
+    
+    vae.eval().requires_grad_(False)
     latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
+    
+    if accelerator.is_main_process:
+        vae_type = "Flux 2 VAE" if is_flux_vae else "InVAE"
+        logger.info(f"Using {vae_type} ({args.vae_name}) with {channels} channels and scaling factor {scaling_factor}")
 
     z_dim = encoder.embed_dim if args.enc_type != 'None' else 0
 
@@ -430,7 +447,7 @@ def main(args):
                     logger.info(f"Saved samples at step {global_step}")
                     if global_step % 50000 == 0:
                         accelerator.log({"samples": wandb.Image(grid, file_type="jpg")}, step=global_step)
-
+            
             logs = {
                 "loss_final": accelerator.gather(loss).mean().detach().item(),
                 "loss_mean": accelerator.gather(loss_mean).mean().detach().item(),
@@ -481,7 +498,8 @@ def parse_args(input_args=None):
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
-    parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae")
+    parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae",
+                        help="VAE model name. Use 'REPA-E/e2e-invae' for InVAE or 'black-forest-labs/FLUX.2-dev' for Flux 2 VAE")
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")
