@@ -372,6 +372,13 @@ SR-DiT-10:
             kd_value: 0.30538
             kd_variance: 0.00655
 
+            with x pred:
+                Inception Score: 192.86972045898438
+                FID: 4.731428865892326
+                sFID: 6.887849073691768
+                Precision: 0.76832
+                Recall: 0.5511
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344

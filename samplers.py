@@ -12,6 +12,29 @@ def expand_t_like_x(t, x_cur):
     t = t.view(t.size(0), *dims)
     return t
 
+def convert_x_to_v(x_pred, x_cur, t, path_type="linear"):
+    """Convert x-prediction to velocity prediction
+    Args:
+        x_pred: [batch_dim, ...] shaped tensor; predicted x_0
+        x_cur: [batch_dim, ...] shaped tensor; x_t data point
+        t: [batch_dim,] time tensor or scalar
+        path_type: interpolation path type
+    Returns:
+        v: velocity prediction
+    """
+    t = expand_t_like_x(t, x_cur)
+    if path_type == "linear":
+        sigma_t = t
+    elif path_type == "cosine":
+        sigma_t = torch.sin(t * np.pi / 2)
+    else:
+        raise NotImplementedError
+    
+    # Clamp sigma_t to avoid division by zero
+    sigma_t_clamped = torch.clamp(sigma_t, min=0.05)
+    v = (x_cur - x_pred) / sigma_t_clamped
+    return v
+
 def get_score_from_velocity(vt, xt, t, path_type="linear"):
     """Wrapper function: transfrom velocity prediction model to score
     Args:
@@ -105,11 +128,19 @@ def euler_maruyama_sampler(
             cls_deps = cls_eps_i * torch.sqrt(torch.abs(dt))
 
             # compute drift
-            v_cur, _, cls_v_cur = model(
+            model_output, _, cls_model_output = model(
                 model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
                 )
-            v_cur = v_cur.to(torch.float64)
-            cls_v_cur = cls_v_cur.to(torch.float64)
+            model_output = model_output.to(torch.float64)
+            cls_model_output = cls_model_output.to(torch.float64)
+            
+            # Convert to velocity if needed
+            if args.prediction == 'x':
+                v_cur = convert_x_to_v(model_output, model_input, time_input, path_type=path_type)
+                cls_v_cur = convert_x_to_v(cls_model_output, cls_model_input, time_input, path_type=path_type)
+            else:
+                v_cur = model_output
+                cls_v_cur = cls_model_output
 
             s_cur = get_score_from_velocity(v_cur, model_input, time_input, path_type=path_type)
             d_cur = v_cur - 0.5 * diffusion * s_cur
@@ -149,12 +180,19 @@ def euler_maruyama_sampler(
         ) * t_cur
     
     # compute drift
-    v_cur, _, cls_v_cur = model(
+    model_output, _, cls_model_output = model(
         model_input.to(dtype=_dtype), time_input.to(dtype=_dtype), **kwargs, cls_token=cls_model_input.to(dtype=_dtype)
         )
-    v_cur = v_cur.to(torch.float64)
-    cls_v_cur = cls_v_cur.to(torch.float64)
-
+    model_output = model_output.to(torch.float64)
+    cls_model_output = cls_model_output.to(torch.float64)
+    
+    # Convert to velocity if needed
+    if args.prediction == 'x':
+        v_cur = convert_x_to_v(model_output, model_input, time_input, path_type=path_type)
+        cls_v_cur = convert_x_to_v(cls_model_output, cls_model_input, time_input, path_type=path_type)
+    else:
+        v_cur = model_output
+        cls_v_cur = cls_model_output
 
     s_cur = get_score_from_velocity(v_cur, model_input, time_input, path_type=path_type)
     cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input, path_type=path_type)
@@ -222,7 +260,7 @@ def euler_maruyama_sampler_path_drop(
             if use_cfg:
                 time_input = torch.ones(x_cur.size(0)).to(device=device, dtype=torch.float64) * t_cur
                 # Conditional branch (no path drop)
-                v_cond, _, cls_v_cond = model(
+                model_output_cond, _, cls_model_output_cond = model(
                     x_cur.to(dtype=_dtype),
                     time_input.to(dtype=_dtype),
                     y=y,
@@ -230,13 +268,25 @@ def euler_maruyama_sampler_path_drop(
                     uncond=False,
                 )
                 # Unconditional branch (enable path drop)
-                v_uncond, _, cls_v_uncond = model(
+                model_output_uncond, _, cls_model_output_uncond = model(
                     x_cur.to(dtype=_dtype),
                     time_input.to(dtype=_dtype),
                     y=y_null,
                     cls_token=cls_x_cur.to(dtype=_dtype),
                     uncond=True,
                 )
+                
+                # Convert to velocity if needed
+                if args.prediction == 'x':
+                    v_cond = convert_x_to_v(model_output_cond, x_cur, time_input, path_type=path_type)
+                    v_uncond = convert_x_to_v(model_output_uncond, x_cur, time_input, path_type=path_type)
+                    cls_v_cond = convert_x_to_v(cls_model_output_cond, cls_x_cur, time_input, path_type=path_type)
+                    cls_v_uncond = convert_x_to_v(cls_model_output_uncond, cls_x_cur, time_input, path_type=path_type)
+                else:
+                    v_cond = model_output_cond
+                    v_uncond = model_output_uncond
+                    cls_v_cond = cls_model_output_cond
+                    cls_v_uncond = cls_model_output_uncond
             else:
                 model_input = x_cur
                 cls_model_input = cls_x_cur
@@ -244,12 +294,20 @@ def euler_maruyama_sampler_path_drop(
                 kwargs = dict(y=y_cur)
                 time_input = torch.ones(model_input.size(0)).to(device=device, dtype=torch.float64) * t_cur
 
-                v_cur, _, cls_v_cur = model(
+                model_output, _, cls_model_output = model(
                     model_input.to(dtype=_dtype),
                     time_input.to(dtype=_dtype),
                     **kwargs,
                     cls_token=cls_model_input.to(dtype=_dtype),
                 )
+                
+                # Convert to velocity if needed
+                if args.prediction == 'x':
+                    v_cur = convert_x_to_v(model_output, model_input, time_input, path_type=path_type)
+                    cls_v_cur = convert_x_to_v(cls_model_output, cls_model_input, time_input, path_type=path_type)
+                else:
+                    v_cur = model_output
+                    cls_v_cur = cls_model_output
             diffusion = compute_diffusion(t_cur)
 
             eps_i = torch.randn_like(x_cur).to(device)
@@ -306,7 +364,7 @@ def euler_maruyama_sampler_path_drop(
         time_input = torch.ones(x_cur.size(0)).to(device=device, dtype=torch.float64) * t_cur
 
         # Conditional branch (no path drop)
-        v_cond, _, cls_v_cond = model(
+        model_output_cond, _, cls_model_output_cond = model(
             x_cur.to(dtype=_dtype),
             time_input.to(dtype=_dtype),
             y=y,
@@ -315,7 +373,7 @@ def euler_maruyama_sampler_path_drop(
         )
 
         # Unconditional branch (enable path drop)
-        v_uncond, _, cls_v_uncond = model(
+        model_output_uncond, _, cls_model_output_uncond = model(
             x_cur.to(dtype=_dtype),
             time_input.to(dtype=_dtype),
             y=y_null,
@@ -323,10 +381,22 @@ def euler_maruyama_sampler_path_drop(
             uncond=True,
         )
 
-        v_cond = v_cond.to(torch.float64)
-        v_uncond = v_uncond.to(torch.float64)
-        cls_v_cond = cls_v_cond.to(torch.float64)
-        cls_v_uncond = cls_v_uncond.to(torch.float64)
+        model_output_cond = model_output_cond.to(torch.float64)
+        model_output_uncond = model_output_uncond.to(torch.float64)
+        cls_model_output_cond = cls_model_output_cond.to(torch.float64)
+        cls_model_output_uncond = cls_model_output_uncond.to(torch.float64)
+        
+        # Convert to velocity if needed
+        if args.prediction == 'x':
+            v_cond = convert_x_to_v(model_output_cond, x_cur, time_input, path_type=path_type)
+            v_uncond = convert_x_to_v(model_output_uncond, x_cur, time_input, path_type=path_type)
+            cls_v_cond = convert_x_to_v(cls_model_output_cond, cls_x_cur, time_input, path_type=path_type)
+            cls_v_uncond = convert_x_to_v(cls_model_output_uncond, cls_x_cur, time_input, path_type=path_type)
+        else:
+            v_cond = model_output_cond
+            v_uncond = model_output_uncond
+            cls_v_cond = cls_model_output_cond
+            cls_v_uncond = cls_model_output_uncond
 
         s_cond = get_score_from_velocity(v_cond, x_cur, time_input, path_type=path_type)
         s_uncond = get_score_from_velocity(v_uncond, x_cur, time_input, path_type=path_type)
@@ -356,14 +426,22 @@ def euler_maruyama_sampler_path_drop(
             device=device, dtype=torch.float64
         ) * t_cur
 
-        v_cur, _, cls_v_cur = model(
+        model_output, _, cls_model_output = model(
             model_input.to(dtype=_dtype),
             time_input.to(dtype=_dtype),
             **kwargs,
             cls_token=cls_model_input.to(dtype=_dtype),
         )
-        v_cur = v_cur.to(torch.float64)
-        cls_v_cur = cls_v_cur.to(torch.float64)
+        model_output = model_output.to(torch.float64)
+        cls_model_output = cls_model_output.to(torch.float64)
+        
+        # Convert to velocity if needed
+        if args.prediction == 'x':
+            v_cur = convert_x_to_v(model_output, model_input, time_input, path_type=path_type)
+            cls_v_cur = convert_x_to_v(cls_model_output, cls_model_input, time_input, path_type=path_type)
+        else:
+            v_cur = model_output
+            cls_v_cur = cls_model_output
 
         s_cur = get_score_from_velocity(v_cur, model_input, time_input, path_type=path_type)
         cls_s_cur = get_score_from_velocity(cls_v_cur, cls_model_input, time_input, path_type=path_type)

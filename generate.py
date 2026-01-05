@@ -285,6 +285,7 @@ if __name__ == "__main__":
     parser.add_argument("--encoder-depth", type=int, nargs="+", default=None,
                         help="List of encoder depths (total layer indices) used during training. "
                              "If omitted, uses per-model defaults (8 for XL/L, 2 for B/S).")
+    parser.add_argument("--prediction", type=str, default="v", choices=["v", "x"])
     parser.add_argument("--path-type", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument("--num-steps", type=int, default=50)
     parser.add_argument("--heun", action=argparse.BooleanOptionalAction, default=False) # only for ode

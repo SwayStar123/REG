@@ -1,7 +1,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/srdit-10-flux2vae"
+SAVE_PATH="exps/srdit-10-flux2vae-x0pred"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
@@ -27,7 +27,8 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --cls=768 \
   --qk-norm \
   --encoder-depth 2 4 6 \
-  --vae-name="black-forest-labs/FLUX.2-dev"
+  --vae-name="black-forest-labs/FLUX.2-dev" \
+  --prediction="x"
 
 
 python ./evaluations/evaluator.py \

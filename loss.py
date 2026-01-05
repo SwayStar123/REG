@@ -83,11 +83,6 @@ class SILoss:
 
         model_input = alpha_t * images + sigma_t * noises
         cls_input = alpha_t.squeeze(-1).squeeze(-1) * cls_token + sigma_t.squeeze(-1).squeeze(-1) * noises_cls
-        if self.prediction == 'v':
-            model_target = d_alpha_t * images + d_sigma_t * noises
-            cls_target = d_alpha_t * cls_token + d_sigma_t * noises_cls
-        else:
-            raise NotImplementedError()
 
         model_output, zs_tilde, cls_output, proj_ids_keeps = model(
             model_input,
@@ -97,9 +92,37 @@ class SILoss:
             return_ids=True,
         )
 
-        #denoising_loss
-        denoising_loss = mean_flat((model_output - model_target) ** 2)
-        denoising_loss_cls = mean_flat((cls_output - cls_target) ** 2)
+        # Compute loss based on prediction type
+        if self.prediction == 'x':
+            # Network outputs x_pred, compute v-loss
+            x_pred = model_output
+            x_pred_cls = cls_output
+            
+            # v_pred = (z_t - x_pred) / sigma_t
+            sigma_t_clamped = torch.clamp(sigma_t, min=0.05)
+            v_pred = (model_input - x_pred) / sigma_t_clamped
+            v_pred_cls = (cls_input - x_pred_cls) / sigma_t_clamped.squeeze(-1).squeeze(-1)
+            
+            # v-target
+            v_target = d_alpha_t * images + d_sigma_t * noises
+            v_target_cls = d_alpha_t * cls_token + d_sigma_t * noises_cls
+            
+            denoising_loss = mean_flat((v_pred - v_target) ** 2)
+            denoising_loss_cls = mean_flat((v_pred_cls - v_target_cls) ** 2)
+            
+            # For CFM loss, also convert to velocity
+            model_target = v_target
+            cls_target = v_target_cls
+            
+        elif self.prediction == 'v':
+            # Original code path
+            model_target = d_alpha_t * images + d_sigma_t * noises
+            cls_target = d_alpha_t * cls_token + d_sigma_t * noises_cls
+            
+            denoising_loss = mean_flat((model_output - model_target) ** 2)
+            denoising_loss_cls = mean_flat((cls_output - cls_target) ** 2)
+        else:
+            raise NotImplementedError()
 
         # projection loss: align teacher z with student outputs. For middle
         # blocks we use sparse student tokens and the corresponding ids_keep;
@@ -130,11 +153,20 @@ class SILoss:
 
         cfm_target = torch.roll(model_target, shifts=1, dims=0)
         cfm_target_cls = torch.roll(cls_target, shifts=1, dims=0)
+        
+        # For CFM loss, use velocity predictions
+        if self.prediction == 'x':
+            cfm_output = v_pred
+            cfm_output_cls = v_pred_cls
+        else:
+            cfm_output = model_output
+            cfm_output_cls = cls_output
+            
         if self.cfm_weighting == "uniform":
-            cfm_loss = -((model_output - cfm_target) ** 2).mean()
-            cfm_loss_cls = -((cls_output - cfm_target_cls) ** 2).mean()
+            cfm_loss = -((cfm_output - cfm_target) ** 2).mean()
+            cfm_loss_cls = -((cfm_output_cls - cfm_target_cls) ** 2).mean()
         elif self.cfm_weighting == "linear":
-            cfm_loss = -(((model_output - cfm_target) ** 2) * time_input).mean()
-            cfm_loss_cls = -(((cls_output - cfm_target_cls) ** 2) * time_input).mean()
+            cfm_loss = -(((cfm_output - cfm_target) ** 2) * time_input).mean()
+            cfm_loss_cls = -(((cfm_output_cls - cfm_target_cls) ** 2) * time_input).mean()
 
         return denoising_loss, proj_loss, time_input, noises, denoising_loss_cls, cfm_loss, cfm_loss_cls
