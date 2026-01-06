@@ -368,6 +368,8 @@ class SiT(nn.Module):
             pt_seq_len=hw_seq_len,
         )
 
+        self.final_conv = nn.Conv2d(self.out_channels, self.out_channels, kernel_size=3, padding=1)
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -643,6 +645,7 @@ class SiT(nn.Module):
 
         x_out, cls_token_out = self.final_layer(x_dec, c, cls=cls_token)
         x_out = self.unpatchify(x_out)
+        x_out = self.final_conv(x_out)
 
         # During training we optionally return per-projection ids_keep so the
         # loss can decide where to apply sparse alignment. For sampling we

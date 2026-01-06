@@ -352,6 +352,26 @@ SR-DiT-9:
         kd_value: 0.29817
         kd_variance: 0.00557
 
+SR-DIT-10:
+    Inception Score: 239.3628387451172
+    FID: 3.2996543157512974
+    sFID: 5.399184413753005
+    Precision: 0.82004
+    Recall: 0.5486
+
+    kd_value: 0.29817
+    kd_variance: 0.00557
+
+    with conv layer added to final layer:
+        Inception Score: 232.99063110351562
+        FID: 3.5141043575345634
+        sFID: 5.473275229156343
+        Precision: 0.82558
+        Recall: 0.5362
+
+        kd_value: 0.30101
+        kd_variance: 0.00588
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344
