@@ -352,6 +352,21 @@ SR-DiT-9:
         kd_value: 0.29817
         kd_variance: 0.00557
 
+        reduce repa coeff to 0.25:
+            Inception Score: 233.56051635742188
+            FID: 3.3447210009465493
+            sFID: 5.469435335832486
+            Precision: 0.82042
+            Recall: 0.5493
+
+    with model layer 1,2,3,4,5,6 to dino layer 12,12:
+        Inception Score: 235.0809783935547
+        FID: 3.404172497367597
+        sFID: 5.403309686440593
+        Precision: 0.82198
+        Recall: 0.5443
+    
+
 512 resolution
     B/1 @ 400k speedrun-dit:
         Inception Score: 192.34141540527344
