@@ -365,6 +365,20 @@ SR-DiT-9:
         sFID: 5.403309686440593
         Precision: 0.82198
         Recall: 0.5443
+
+    XL with model layer 2 4 6 8 aligned to dino layer 12:
+        Inception Score: 308.2094421386719
+        FID: 3.2264931831273884
+        sFID: 5.127493769596185
+        Precision: 0.84186
+        Recall: 0.5576
+
+    XL with model layer 2 4 6 8 10 12 aligned to dino layer 12:
+        Inception Score: 313.4049987792969
+        FID: 3.381883233418989
+        sFID: 4.893881092075844
+        Precision: 0.84704
+        Recall: 0.555  
     
 
 512 resolution

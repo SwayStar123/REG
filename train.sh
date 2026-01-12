@@ -9,17 +9,17 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --path-type="linear" \
     --prediction="v" \
     --weighting="uniform" \
-    --model="SiT-B/1" \
+    --model="SiT-XL/1" \
     --enc-type="dinov2-vit-b" \
-    --proj-coeff=0.25 \
+    --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-0.25aligndino12to2,4,6" \
+    --exp-name="srdit-10-xl-align2,4,6,8" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
     --cfm-weighting="uniform" \
     --cfm-coeff=0.05 \
-    --dino-layer-index 12 12 12\
-    --encoder-depth 2 4 6
+    --dino-layer-index 12 12 12 12 \
+    --encoder-depth 2 4 6 8
     
