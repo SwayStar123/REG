@@ -1,9 +1,9 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/srdit-10-xl-align2,4,6,8"
+SAVE_PATH="exps/srdit-10-decay-repa-to-0"
 NUM_STEP=250
-MODEL_SIZE='XL'
+MODEL_SIZE='B'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
@@ -26,7 +26,7 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
   --qk-norm \
-  --encoder-depth 2 4 6 8 10 12
+  --encoder-depth 2 4 6
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \

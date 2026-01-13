@@ -352,6 +352,13 @@ SR-DiT-9:
         kd_value: 0.29817
         kd_variance: 0.00557
 
+        decay loss coefficients to 0:
+            Inception Score: 232.2579345703125
+            FID: 3.519319246892678
+            sFID: 5.178273685824479
+            Precision: 0.82662
+            Recall: 0.5388
+
         reduce repa coeff to 0.25:
             Inception Score: 233.56051635742188
             FID: 3.3447210009465493

@@ -362,13 +362,19 @@ def main(args):
                         exit()
 
             with accelerator.accumulate(model):
+                # Calculate coefficient decay (linear decay to 0 by 400k steps)
+                decay_steps = 400000
+                decay_factor = max(0.0, 1.0 - (global_step / decay_steps))
+                current_proj_coeff = args.proj_coeff * decay_factor
+                current_cls_coeff = args.cls * decay_factor
+                
                 model_kwargs = dict(y=labels)
                 loss1, proj_loss1, time_input, noises, loss2, cfm_loss, cfm_loss_cls = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
                                                                        time_input=None, noises=None)
                 loss_mean = loss1.mean()
-                loss_mean_cls = loss2.mean() * args.cls
-                proj_loss_mean = proj_loss1.mean() * args.proj_coeff
+                loss_mean_cls = loss2.mean() * current_cls_coeff
+                proj_loss_mean = proj_loss1.mean() * current_proj_coeff
                 cfm_loss_mean = cfm_loss.mean() * args.cfm_coeff
                 loss = loss_mean + proj_loss_mean + loss_mean_cls + cfm_loss_mean 
 
@@ -437,7 +443,9 @@ def main(args):
                 "proj_loss": accelerator.gather(proj_loss_mean).mean().detach().item(),
                 "loss_mean_cls": accelerator.gather(loss_mean_cls).mean().detach().item(),
                 "cfm_loss": accelerator.gather(cfm_loss_mean).mean().detach().item(),
-                "grad_norm": accelerator.gather(grad_norm).mean().detach().item()
+                "grad_norm": accelerator.gather(grad_norm).mean().detach().item(),
+                "current_proj_coeff": current_proj_coeff,
+                "current_cls_coeff": current_cls_coeff
             }
 
             log_message = ", ".join(f"{key}: {value:.6f}" for key, value in logs.items())
