@@ -1,7 +1,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
-STEP="0050000"
-SAVE_PATH="exps/b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-muon-lr1e-3-wd0.00"
+STEP="0400000"
+SAVE_PATH="exps/srdit-10-muon-lr1e-3-muon-whitelist-attn-mlp"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0
@@ -25,7 +25,8 @@ python -m torch.distributed.launch --master_port=$random_number --nproc_per_node
   --guidance-high=${GH} \
   --sample-dir ${SAVE_PATH}/checkpoints \
   --cls=768 \
-  --qk-norm 
+  --qk-norm \
+  --encoder-depth 2 4 6
 
 python ./evaluations/evaluator.py \
     --ref_batch evaluations/VIRTUAL_imagenet256_labeled.npz \

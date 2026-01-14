@@ -13,7 +13,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="b1-reg-invae-sprint-rms-rope-qknorm-valres-cfm-ts-muon-lr5e-4-wd0.00" \
+    --exp-name="srdit-10-muon-lr1e-3-muon-whitelist-attn-mlp" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
@@ -21,5 +21,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --cfm-weighting="uniform" \
     --cfm-coeff=0.05 \
     --optimizer="muon" \
-    --muon-lr=0.0005 \
-    --muon-weight-decay=0.00 
+    --muon-lr=0.001 \
+    --muon-weight-decay=0.00 \
+    --dino-layer-index 12 12 12 \
+    --encoder-depth 2 4 6

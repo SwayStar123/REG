@@ -167,14 +167,36 @@ def main(args):
     latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
     z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
+
+    # Default encoder depths (total layer indices) per model. These mirror the
+    # original configs: XL/L use depth 8, B/S use depth 2.
+    default_encoder_depths = {
+        "SiT-XL/1": 8, "SiT-XL/2": 8, "SiT-XL/4": 8,
+        "SiT-L/1": 8,  "SiT-L/2":  8, "SiT-L/4":  8,
+        "SiT-B/1": 2,  "SiT-B/2":  2, "SiT-B/4":  2,
+        "SiT-S/1": 2,  "SiT-S/2":  2, "SiT-S/4":  2,
+    }
+
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
+    if args.encoder_depth is None:
+        if args.model not in default_encoder_depths:
+            raise ValueError(f"No default encoder_depth configured for model {args.model}")
+        encoder_depth = default_encoder_depths[args.model]
+    else:
+        # User-provided list of total layer indices; SiT will treat this as an
+        # ordered list of depths.
+        encoder_depth = list(args.encoder_depth)
+
+    args.encoder_depth = encoder_depth
+
     model = SiT_models[args.model](
         input_size=latent_size,
         in_channels=channels,
         num_classes=args.num_classes,
-        use_cfg = (args.cfg_prob > 0),
-        z_dims = z_dims,
-        **block_kwargs
+        use_cfg=(args.cfg_prob > 0),
+        z_dims=z_dims,
+        encoder_depth=encoder_depth,
+        **block_kwargs,
     )
 
     model = model.to(device)
@@ -368,14 +390,44 @@ def main(args):
                 with accelerator.autocast():
                     for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
                         raw_image_ = preprocess_raw_image(raw_image, encoder_type)
-                        z = encoder.forward_features(raw_image_)
                         if 'dinov2' in encoder_type:
-                            dense_z = z['x_norm_patchtokens']
-                            cls_token = z['x_norm_clstoken']
-                            dense_z = torch.cat([cls_token.unsqueeze(1), dense_z], dim=1)
+                            n_blocks = getattr(encoder, "n_blocks", None)
+
+                            # Normalize CLI argument: allow None (use last block), int, or list of ints.
+                            dino_layers = getattr(args, "dino_layer_index", None)
+                            if dino_layers is None or n_blocks is None:
+                                # Default: use the standard forward_features (last block).
+                                feats = encoder.forward_features(raw_image_)
+                                patch_tokens = feats["x_norm_patchtokens"]
+                                cls_token = feats["x_norm_clstoken"]
+                                dense_z = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
+                                zs.append(dense_z)
+                            else:
+                                if isinstance(dino_layers, int):
+                                    dino_layers = [dino_layers]
+
+                                # Clamp each requested layer into the valid range [0, n_blocks - 1].
+                                clamped_layers = [min(max(0, idx), n_blocks - 1) for idx in dino_layers]
+
+                                # get_intermediate_layers expects unique indices; we will duplicate
+                                # outputs later for any repeated indices.
+                                unique_layers = sorted(set(clamped_layers))
+
+                                layers = encoder.get_intermediate_layers(
+                                    raw_image_, n=unique_layers, reshape=False, return_class_token=True
+                                )
+
+                                # Map layer index -> (patch_tokens, cls_token)
+                                layer_to_tokens = {
+                                    layer_idx: layer_out for layer_idx, layer_out in zip(unique_layers, layers)
+                                }
+
+                                for req_idx in clamped_layers:
+                                    (patch_tokens, cls_token) = layer_to_tokens[req_idx]
+                                    dense_z = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
+                                    zs.append(dense_z)
                         else:
                             exit()
-                        zs.append(dense_z)
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
@@ -555,6 +607,13 @@ def parse_args(input_args=None):
     parser.add_argument("--cls", type=float, default=0.03)
     parser.add_argument("--cfm-weighting", default="uniform", choices=["uniform", "linear"], type=str)
     parser.add_argument("--cfm-coeff", type=float, default=0.05)
+    parser.add_argument("--dino-layer-index", type=int, nargs="+", default=None,
+                        help="List of DINOv2 transformer block indices to use for patch tokens. "
+                             "If omitted, uses the default final block. Can contain repeated indices.")
+
+    parser.add_argument("--encoder-depth", type=int, nargs="+", default=None,
+                        help="List of encoder depths (middle blocks) at which to take student projections. "
+                             "If omitted, uses the defaults for each SiT model size as defined in models/sit.py.")
 
     parser.add_argument("--time-shifting", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--shift-base", type=int, default=4096)

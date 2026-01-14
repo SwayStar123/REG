@@ -295,8 +295,15 @@ class SiT(nn.Module):
         self.num_heads = num_heads
         self.use_cfg = use_cfg
         self.num_classes = num_classes
-        self.z_dims = z_dims
-        self.encoder_depth = encoder_depth
+
+        # Allow encoder_depth to be either an int or a list of ints specifying
+        # middle-block depths at which to take student projections.
+        if isinstance(encoder_depth, int):
+            encoder_depths = [encoder_depth]
+        else:
+            encoder_depths = list(encoder_depth)
+
+        self.encoder_depths = encoder_depths
         self.depth = depth
 
         # ----------------- SPRINT configuration -----------------
@@ -341,12 +348,11 @@ class SiT(nn.Module):
                 )
             )
         self.blocks = nn.ModuleList(blocks)
-        self.projectors = nn.ModuleList([
-            build_mlp(hidden_size, projector_dim, z_dim) for z_dim in z_dims
-            ])
 
-        z_dim = self.z_dims[0]
-        cls_token_dim = z_dim
+        self.z_dims = z_dims
+        self.projector = build_mlp(hidden_size, projector_dim, self.z_dims[0])
+
+        cls_token_dim = self.z_dims[0]
         self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels, cls_token_dim)
 
 
@@ -476,7 +482,16 @@ class SiT(nn.Module):
         return h
 
     # ---------------------------------------------------------------------
-    def forward(self, x, t, y, return_logvar: bool = False, cls_token: Optional[torch.Tensor] = None, uncond: bool = False):
+    def forward(
+        self,
+        x,
+        t,
+        y,
+        return_logvar: bool = False,
+        cls_token: Optional[torch.Tensor] = None,
+        uncond: bool = False,
+        return_ids: bool = False,
+    ):
         """
         Forward pass of SiT with SPRINT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -515,6 +530,13 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)  # (N, D)
         c = t_embed + y
 
+        # We treat encoder_depths as an ordered list of total diffusion layer
+        # indices (1..depth). At each matching layer, we take exactly one
+        # projection with the shared projector, so that index i of
+        # encoder_depths aligns with index i of the teacher zs list.
+        enc_depths = self.encoder_depths
+        enc_idx = 0
+
         # ------------------------------------------------------------------
         # 1) Encoder fθ on all tokens (dense, shallow)
         # ------------------------------------------------------------------
@@ -522,17 +544,23 @@ class SiT(nn.Module):
         rope_ids_enc = rope_ids_full
 
         v1_full = None
+        zs = []
+        proj_ids_keeps = []
+
         for i in range(self.num_f):
             x_enc = self.blocks[i](x_enc, c, self.feat_rope, rope_ids_enc, v1=v1_full)  # (N, T, D)
 
             if v1_full is None:
                 v1_full = self.blocks[i].attn.v_last
 
-        # Use encoder output for z-projections (REPA / SPRINT z_t)
-        zs = [
-            projector(x_enc.reshape(-1, D)).reshape(N, -1, z_dim)
-            for projector, z_dim in zip(self.projectors, self.z_dims)
-        ]
+            # Total diffusion layer index (1-based) for this encoder block.
+            layer_idx = i + 1
+            if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
+                B_enc, T_enc, D_enc = x_enc.shape
+                z_enc = self.projector(x_enc.reshape(-1, D_enc)).reshape(B_enc, -1, self.z_dims[0])
+                zs.append(z_enc)
+                proj_ids_keeps.append(None)
+                enc_idx += 1
 
         # ------------------------------------------------------------------
         # 2) Drop tokens to build sparse input to gθ (SPRINT sparse path)
@@ -558,10 +586,20 @@ class SiT(nn.Module):
 
         # ------------------------------------------------------------------
         # 3) Middle blocks gθ on sparse tokens
+        #    Compute z-projections at the encoder_depth-th middle block
+        #    using the current sparse representation.
         # ------------------------------------------------------------------
         x_mid = x_sparse
         for i in range(self.num_f, self.num_f + self.num_g):
             x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse, v1=v1_sparse)  # (N, T_keep, D)
+
+            layer_idx = i + 1  # 1-based total diffusion layer index
+            if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
+                B_mid, T_mid, D_mid = x_mid.shape
+                z_mid = self.projector(x_mid.reshape(-1, D_mid)).reshape(B_mid, -1, self.z_dims[0])
+                zs.append(z_mid)
+                proj_ids_keeps.append(ids_keep)
+                enc_idx += 1
 
         # ------------------------------------------------------------------
         # 4) Pad back to full length with [MASK] to get g_pad
@@ -598,11 +636,24 @@ class SiT(nn.Module):
         for i in range(self.num_f + self.num_g, self.depth):
             x_dec = self.blocks[i](x_dec, c, self.feat_rope, rope_ids_full, v1=v1_full)
 
+            layer_idx = i + 1
+            if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
+                B_dec, T_dec, D_dec = x_dec.shape
+                z_dec = self.projector(x_dec.reshape(-1, D_dec)).reshape(B_dec, -1, self.z_dims[0])
+                zs.append(z_dec)
+                proj_ids_keeps.append(None)
+                enc_idx += 1
+
         x_out, cls_token_out = self.final_layer(x_dec, c, cls=cls_token)
         x_out = self.unpatchify(x_out)
 
-        # ids_keep lets you inspect which tokens were kept; ignore it if you don't need it.
-        return x_out, zs, cls_token_out
+        # During training we optionally return per-projection ids_keep so the
+        # loss can decide where to apply sparse alignment. For sampling we
+        # preserve the original 3-tuple API.
+        if return_ids:
+            return x_out, zs, cls_token_out, proj_ids_keeps
+        else:
+            return x_out, zs, cls_token_out
 
 
 #################################################################################
@@ -664,40 +715,40 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def SiT_XL_1(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=1, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=1, num_heads=16, **kwargs)
 
 def SiT_XL_2(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
 def SiT_XL_4(**kwargs):
-    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
 
 def SiT_L_1(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=1, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=1, num_heads=16, **kwargs)
 
 def SiT_L_2(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
 def SiT_L_4(**kwargs):
-    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, encoder_depth=8, **kwargs)
+    return SiT(depth=24, hidden_size=1024, decoder_hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
 def SiT_B_1(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=1, num_heads=12, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=1, num_heads=12, **kwargs)
 
 def SiT_B_2(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
 def SiT_B_4(**kwargs):
-    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=768, decoder_hidden_size=768, patch_size=4, num_heads=12, **kwargs)
 
 def SiT_S_1(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=1, num_heads=6, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=1, num_heads=6, **kwargs)
 
 def SiT_S_2(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
 
 def SiT_S_4(**kwargs):
-    return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, encoder_depth=4, **kwargs)
+    return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
 
 SiT_models = {
     'SiT-XL/1': SiT_XL_1,  'SiT-XL/2': SiT_XL_2,  'SiT-XL/4': SiT_XL_4,

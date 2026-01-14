@@ -91,22 +91,44 @@ class SILoss:
         else:
             raise NotImplementedError()
 
-        model_output, zs_tilde, cls_output = model(model_input, time_input.flatten(), **model_kwargs,
-                                                    cls_token=cls_input)
+        model_output, zs_tilde, cls_output, proj_ids_keeps = model(
+            model_input,
+            time_input.flatten(),
+            **model_kwargs,
+            cls_token=cls_input,
+            return_ids=True,
+        )
 
         #denoising_loss
         denoising_loss = mean_flat((model_output - model_target) ** 2)
         denoising_loss_cls = mean_flat((cls_output - cls_target) ** 2)
 
-        # projection loss
-        proj_loss = 0.
-        bsz = zs[0].shape[0]
-        for i, (z, z_tilde) in enumerate(zip(zs, zs_tilde)):
-            for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
-                z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1) 
-                z_j = torch.nn.functional.normalize(z_j, dim=-1) 
-                proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
-        proj_loss /= (len(zs) * bsz)
+        # projection loss: align teacher z with student outputs. For middle
+        # blocks we use sparse student tokens and the corresponding ids_keep;
+        # for encoder/decoder depths we match all tokens densely.
+        # zs: list of [B, T_full, C] teacher projections
+        # zs_tilde: list of [B, T_keep or T_full, C] student projections
+        proj_loss = 0.0
+        num_terms = 0
+        for z, z_tilde, ids_keep in zip(zs, zs_tilde, proj_ids_keeps):
+            # If no ids_keep was provided for this projection, compare all
+            # tokens directly. Otherwise gather teacher tokens at the kept
+            # sparse indices (ids_keep: [B, T_keep]).
+            if ids_keep is None:
+                z_sel = z
+            else:
+                B, T_full, C = z.shape
+                z_sel = z.gather(1, ids_keep.unsqueeze(-1).expand(-1, -1, C))
+
+            # z_sel and z_tilde should now both be [B, T_keep, C] (or [B, T_full, C] in dense case)
+            z_sel = torch.nn.functional.normalize(z_sel, dim=-1)
+            z_tilde_norm = torch.nn.functional.normalize(z_tilde, dim=-1)
+
+            proj_loss += mean_flat(-(z_sel * z_tilde_norm).sum(dim=-1))
+            num_terms += 1
+
+        if num_terms > 0:
+            proj_loss /= num_terms
 
         cfm_target = torch.roll(model_target, shifts=1, dims=0)
         cfm_target_cls = torch.roll(cls_target, shifts=1, dims=0)
