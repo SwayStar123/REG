@@ -367,6 +367,20 @@ SR-DiT-10-B/1 :
                 Precision: 0.81044
                 Recall: 0.5594
 
+            with structured token drop:
+                Inception Score: 206.33251953125
+                FID: 4.143563761566156
+                sFID: 6.407405913032335
+                Precision: 0.80178
+                Recall: 0.5385
+
+            with jittered token drop:
+                Inception Score: 178.7998046875
+                FID: 4.917497213113506
+                sFID: 5.733617308878706
+                Precision: 0.76116
+                Recall: 0.5856
+
 
 
 512 resolution
