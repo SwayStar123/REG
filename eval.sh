@@ -1,9 +1,9 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/srdit-10-muon-lr1e-3-muon-whitelist-attn-mlp"
+SAVE_PATH="exps/srdit-11-xl"
 NUM_STEP=250
-MODEL_SIZE='B'
+MODEL_SIZE='XL'
 CFG_SCALE=1.0
 CLS_CFG_SCALE=1.0
 GH=1.0
