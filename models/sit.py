@@ -5,6 +5,7 @@
 # GLIDE: https://github.com/openai/glide-text2im
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # SPRINT: SPRINT: Sparse-Dense Residual Fusion for Efficient Diffusion Transformers
+# mHC-lite: You Don't Need 20 Sinkhorn-Knopp Iterations
 # --------------------------------------------------------
 
 from typing import Optional
@@ -17,6 +18,7 @@ from torch.nn import RMSNorm
 import torch.nn.functional as F
 
 from models.pos_embed import VisionRotaryEmbeddingFast
+from models.mhc_lite_claude import MHCLite
 
 def build_mlp(hidden_size, projector_dim, z_dim):
     return nn.Sequential(
@@ -189,7 +191,17 @@ class SiTBlock(nn.Module):
     """
     A SiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, use_v1_residual: bool = True, **block_kwargs):
+    def __init__(
+        self, 
+        hidden_size, 
+        num_heads, 
+        mlp_ratio=4.0, 
+        use_v1_residual: bool = True,
+        use_mhc: bool = False,
+        num_residual_streams: int = 4,
+        layer_index: int = 0,
+        **block_kwargs
+    ):
         super().__init__()
         self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(
@@ -211,6 +223,19 @@ class SiTBlock(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
+        
+        self.use_mhc = use_mhc
+        if use_mhc:
+            self.mhc_attn = MHCLite(
+                num_residual_streams,
+                dim=hidden_size,
+                layer_index=layer_index * 2,
+            )
+            self.mhc_mlp = MHCLite(
+                num_residual_streams,
+                dim=hidden_size,
+                layer_index=layer_index * 2 + 1,
+            )
 
     def forward(
         self,
@@ -223,15 +248,35 @@ class SiTBlock(nn.Module):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa.unsqueeze(1) * self.attn(
-            modulate(self.norm1(x), shift_msa, scale_msa),
-            rope=feat_rope,
-            rope_ids=rope_ids,
-            v1=v1,
-        )
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(
-            modulate(self.norm2(x), shift_mlp, scale_mlp)
-        )
+        
+        if self.use_mhc:
+            # Attention with mHC-lite residual
+            attn_input, add_attn_residual = self.mhc_attn(x)
+            attn_out = gate_msa.unsqueeze(1) * self.attn(
+                modulate(self.norm1(attn_input), shift_msa, scale_msa),
+                rope=feat_rope,
+                rope_ids=rope_ids,
+                v1=v1,
+            )
+            x = add_attn_residual(attn_out)
+            
+            # MLP with mHC-lite residual
+            mlp_input, add_mlp_residual = self.mhc_mlp(x)
+            mlp_out = gate_mlp.unsqueeze(1) * self.mlp(
+                modulate(self.norm2(mlp_input), shift_mlp, scale_mlp)
+            )
+            x = add_mlp_residual(mlp_out)
+        else:
+            # Original residual connections
+            x = x + gate_msa.unsqueeze(1) * self.attn(
+                modulate(self.norm1(x), shift_msa, scale_msa),
+                rope=feat_rope,
+                rope_ids=rope_ids,
+                v1=v1,
+            )
+            x = x + gate_mlp.unsqueeze(1) * self.mlp(
+                modulate(self.norm2(x), shift_mlp, scale_mlp)
+            )
 
         return x
 
@@ -285,6 +330,8 @@ class SiT(nn.Module):
         z_dims=[768],
         projector_dim=2048,
         cls_token_dim=768,
+        use_mhc: bool = True,
+        num_residual_streams: int = 2,
         **block_kwargs # fused_attn
     ):
         super().__init__()
@@ -326,6 +373,15 @@ class SiT(nn.Module):
         self.fusion_proj = nn.Linear(2 * hidden_size, hidden_size, bias=True)
         # --------------------------------------------------------
 
+        self.use_mhc = use_mhc
+        self.num_residual_streams = num_residual_streams
+        if use_mhc:
+            _, self.expand_streams, self.reduce_streams = \
+                MHCLite.get_init_and_expand_reduce_stream_functions(
+                    num_residual_streams,
+                    dim=hidden_size,
+                )
+
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
             )
@@ -344,10 +400,18 @@ class SiT(nn.Module):
                     num_heads,
                     mlp_ratio=mlp_ratio,
                     use_v1_residual=use_v1_residual,
+                    use_mhc=use_mhc,
+                    num_residual_streams=num_residual_streams,
+                    layer_index=i,
                     **block_kwargs,
                 )
             )
         self.blocks = nn.ModuleList(blocks)
+
+        # self.blocks = nn.ModuleList([
+        #     torch.compile(block, mode="reduce-overhead") 
+        #     for block in self.blocks
+        # ])
 
         self.z_dims = z_dims
         self.projector = build_mlp(hidden_size, projector_dim, self.z_dims[0])
@@ -467,7 +531,7 @@ class SiT(nn.Module):
 
         B, T_keep, C = x_sparse.shape
         assert T_full >= T_keep
-        x_pad = self.mask_token.expand(B, T_full, C).clone()
+        x_pad = self.mask_token.to(dtype=x_sparse.dtype).expand(B, T_full, C).clone()
         x_pad.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, C), x_sparse)
         return x_pad
 
@@ -530,6 +594,12 @@ class SiT(nn.Module):
         y = self.y_embedder(y, self.training)  # (N, D)
         c = t_embed + y
 
+        # mHC-lite EXPAND
+        # Only expand x, NOT c or rope_ids_full
+        # The branch (attention/MLP) operates on aggregated batch size N
+        if self.use_mhc:
+            x = self.expand_streams(x)  # (N*s, T, D)
+
         # We treat encoder_depths as an ordered list of total diffusion layer
         # indices (1..depth). At each matching layer, we take exactly one
         # projection with the shared projector, so that index i of
@@ -541,23 +611,25 @@ class SiT(nn.Module):
         # 1) Encoder fθ on all tokens (dense, shallow)
         # ------------------------------------------------------------------
         x_enc = x
-        rope_ids_enc = rope_ids_full
+        rope_ids_enc = rope_ids_full  # (N, T) - NOT expanded
 
         v1_full = None
         zs = []
         proj_ids_keeps = []
 
         for i in range(self.num_f):
-            x_enc = self.blocks[i](x_enc, c, self.feat_rope, rope_ids_enc, v1=v1_full)  # (N, T, D)
+            x_enc = self.blocks[i](x_enc, c, self.feat_rope, rope_ids_enc, v1=v1_full)  # (N*s, T, D)
 
             if v1_full is None:
-                v1_full = self.blocks[i].attn.v_last
+                v1_full = self.blocks[i].attn.v_last  # (N, H, T, Dh) from aggregated attention
 
             # Total diffusion layer index (1-based) for this encoder block.
             layer_idx = i + 1
             if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
-                B_enc, T_enc, D_enc = x_enc.shape
-                z_enc = self.projector(x_enc.reshape(-1, D_enc)).reshape(B_enc, -1, self.z_dims[0])
+                # mHC-lite: reduce for projection
+                x_enc_for_proj = self.reduce_streams(x_enc) if self.use_mhc else x_enc
+                B_enc, T_enc, D_enc = x_enc_for_proj.shape
+                z_enc = self.projector(x_enc_for_proj.reshape(-1, D_enc)).reshape(B_enc, -1, self.z_dims[0])
                 zs.append(z_enc)
                 proj_ids_keeps.append(None)
                 enc_idx += 1
@@ -565,14 +637,30 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         # 2) Drop tokens to build sparse input to gθ (SPRINT sparse path)
         # ------------------------------------------------------------------
-        if self.training:
-            x_sparse, ids_keep = self._drop_tokens(x_enc, self.sprint_drop_ratio)
+        # mHC-lite: token dropping 
+        if self.use_mhc:
+            # For mHC, reduce first to get (N, T, D), compute ids_keep, then apply to expanded
+            x_enc_reduced = self.reduce_streams(x_enc)  # (N, T, D)
+            if self.training:
+                x_sparse_reduced, ids_keep = self._drop_tokens(x_enc_reduced, self.sprint_drop_ratio)
+                if ids_keep is not None:
+                    # Apply same dropping pattern to all streams
+                    ids_keep_expanded = ids_keep.repeat(self.num_residual_streams, 1)  # (N*s, T_keep)
+                    x_sparse = x_enc.gather(1, ids_keep_expanded.unsqueeze(-1).expand(-1, -1, D))
+                else:
+                    x_sparse = x_enc
+            else:
+                x_sparse = x_enc
+                ids_keep = None
         else:
-            x_sparse = x_enc
-            ids_keep = None
+            if self.training:
+                x_sparse, ids_keep = self._drop_tokens(x_enc, self.sprint_drop_ratio)
+            else:
+                x_sparse = x_enc
+                ids_keep = None
 
         if ids_keep is not None:
-            rope_ids_sparse = rope_ids_full.gather(1, ids_keep)
+            rope_ids_sparse = rope_ids_full.gather(1, ids_keep)  # (N, T_keep)
         else:
             rope_ids_sparse = rope_ids_full
 
@@ -591,12 +679,14 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         x_mid = x_sparse
         for i in range(self.num_f, self.num_f + self.num_g):
-            x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse, v1=v1_sparse)  # (N, T_keep, D)
+            x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse, v1=v1_sparse)  # (N*s, T_keep, D)
 
             layer_idx = i + 1  # 1-based total diffusion layer index
             if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
-                B_mid, T_mid, D_mid = x_mid.shape
-                z_mid = self.projector(x_mid.reshape(-1, D_mid)).reshape(B_mid, -1, self.z_dims[0])
+                # mHC-lite: reduce for projection
+                x_mid_for_proj = self.reduce_streams(x_mid) if self.use_mhc else x_mid
+                B_mid, T_mid, D_mid = x_mid_for_proj.shape
+                z_mid = self.projector(x_mid_for_proj.reshape(-1, D_mid)).reshape(B_mid, -1, self.z_dims[0])
                 zs.append(z_mid)
                 proj_ids_keeps.append(ids_keep)
                 enc_idx += 1
@@ -604,7 +694,12 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         # 4) Pad back to full length with [MASK] to get g_pad
         # ------------------------------------------------------------------
-        g_pad = self._pad_with_mask(x_mid, ids_keep, T_full=T)
+        # mHC-lite: padding
+        if self.use_mhc:
+            ids_keep_for_pad = ids_keep.repeat(self.num_residual_streams, 1) if ids_keep is not None else None
+            g_pad = self._pad_with_mask(x_mid, ids_keep_for_pad, T_full=T)
+        else:
+            g_pad = self._pad_with_mask(x_mid, ids_keep, T_full=T)
 
         # ------------------------------------------------------------------
         # 5) Path-drop learning
@@ -627,7 +722,7 @@ class SiT(nn.Module):
         # ------------------------------------------------------------------
         # 6) Sparse–dense residual fusion: h_in = Fusion(ft, g_pad)
         # ------------------------------------------------------------------
-        h_in = self._sprint_fuse(x_enc, g_pad)  # (N, T, D)
+        h_in = self._sprint_fuse(x_enc, g_pad)  # (N*s, T, D) if mHC else (N, T, D)
 
         # ------------------------------------------------------------------
         # 7) Decoder hθ on fused representation
@@ -638,11 +733,17 @@ class SiT(nn.Module):
 
             layer_idx = i + 1
             if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:
-                B_dec, T_dec, D_dec = x_dec.shape
-                z_dec = self.projector(x_dec.reshape(-1, D_dec)).reshape(B_dec, -1, self.z_dims[0])
+                # mHC-lite: reduce for projection
+                x_dec_for_proj = self.reduce_streams(x_dec) if self.use_mhc else x_dec
+                B_dec, T_dec, D_dec = x_dec_for_proj.shape
+                z_dec = self.projector(x_dec_for_proj.reshape(-1, D_dec)).reshape(B_dec, -1, self.z_dims[0])
                 zs.append(z_dec)
                 proj_ids_keeps.append(None)
                 enc_idx += 1
+
+        # mHC-lite REDUCE
+        if self.use_mhc:
+            x_dec = self.reduce_streams(x_dec)  # (N, T, D)
 
         x_out, cls_token_out = self.final_layer(x_dec, c, cls=cls_token)
         x_out = self.unpatchify(x_out)
@@ -654,7 +755,6 @@ class SiT(nn.Module):
             return x_out, zs, cls_token_out, proj_ids_keeps
         else:
             return x_out, zs, cls_token_out
-
 
 #################################################################################
 #                   Sine/Cosine Positional Embedding Functions                  #
@@ -756,4 +856,3 @@ SiT_models = {
     'SiT-B/1':  SiT_B_1,   'SiT-B/2':  SiT_B_2,   'SiT-B/4':  SiT_B_4,
     'SiT-S/1':  SiT_S_1,   'SiT-S/2':  SiT_S_2,   'SiT-S/4':  SiT_S_4,
 }
-
