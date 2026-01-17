@@ -324,7 +324,15 @@ class SiT(nn.Module):
 
         # Fusion projection: concat(ft, g_pad) → fused hidden
         self.fusion_proj = nn.Linear(2 * hidden_size, hidden_size, bias=True)
-        # --------------------------------------------------------
+
+        # U-ViT style long skip connections within sparse path
+        # Following U-ViT: (num_g - 1) // 2 connections
+        # Block k output → combined with Block (num_g - 1 - k) input
+        self.num_sparse_skips = (self.num_g - 1) // 2 if self.num_g >= 3 else 0
+        self.sparse_skip_projs = nn.ModuleList([
+            nn.Linear(2 * hidden_size, hidden_size, bias=True)
+            for _ in range(self.num_sparse_skips)
+        ])
 
         self.x_embedder = PatchEmbed(
             input_size, patch_size, in_channels, hidden_size, bias=True
@@ -467,7 +475,7 @@ class SiT(nn.Module):
 
         B, T_keep, C = x_sparse.shape
         assert T_full >= T_keep
-        x_pad = self.mask_token.expand(B, T_full, C).clone()
+        x_pad = self.mask_token.expand(B, T_full, C).to(x_sparse.dtype).clone()
         x_pad.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, C), x_sparse)
         return x_pad
 
@@ -585,13 +593,29 @@ class SiT(nn.Module):
             v1_sparse = v1_full
 
         # ------------------------------------------------------------------
-        # 3) Middle blocks gθ on sparse tokens
+        # 3) Middle blocks gθ on sparse tokens with U-ViT long skip connections
         #    Compute z-projections at the encoder_depth-th middle block
         #    using the current sparse representation.
         # ------------------------------------------------------------------
         x_mid = x_sparse
-        for i in range(self.num_f, self.num_f + self.num_g):
+        skip_cache = {}  # Store outputs for U-ViT style skip connections
+
+        for local_idx, i in enumerate(range(self.num_f, self.num_f + self.num_g)):
+            # Check if this block RECEIVES a skip connection from an earlier block
+            skip_source_idx = self.num_g - 1 - local_idx
+            if skip_source_idx < self.num_sparse_skips and local_idx > skip_source_idx:
+                # This block receives skip from block at skip_source_idx
+                hs = skip_cache[skip_source_idx]
+                # Combine using U-ViT pattern: Linear(Concat(x_mid, hs))
+                x_mid = self.sparse_skip_projs[skip_source_idx](
+                    torch.cat([x_mid, hs], dim=-1)
+                )
+
             x_mid = self.blocks[i](x_mid, c, self.feat_rope, rope_ids_sparse, v1=v1_sparse)  # (N, T_keep, D)
+
+            # Cache this block's output if it will be used for a skip connection
+            if local_idx < self.num_sparse_skips:
+                skip_cache[local_idx] = x_mid
 
             layer_idx = i + 1  # 1-based total diffusion layer index
             if enc_idx < len(enc_depths) and layer_idx == enc_depths[enc_idx]:

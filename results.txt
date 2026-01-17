@@ -381,7 +381,13 @@ SR-DiT-10-B/1 :
                 Precision: 0.76116
                 Recall: 0.5856
 
-
+SR-DiT-11:
+    with uvit long skips:
+        Inception Score: 228.67416381835938
+        FID: 3.146569557112457
+        sFID: 5.4405360080691025
+        Precision: 0.81204
+        Recall: 0.5546
 
 512 resolution
     B/1 @ 400k speedrun-dit:
