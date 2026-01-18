@@ -381,6 +381,13 @@ SR-DiT-10-B/1 :
                 Precision: 0.76116
                 Recall: 0.5856
 
+SR-DiT-11:
+    + derf:
+        Inception Score: 198.79092407226562
+        FID: 3.4619115716256488
+        sFID: 5.786947277303057
+        Precision: 0.7852
+        Recall: 0.5843
 
 
 512 resolution

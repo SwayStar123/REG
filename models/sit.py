@@ -13,7 +13,6 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Mlp
-from torch.nn import RMSNorm
 import torch.nn.functional as F
 
 from models.pos_embed import VisionRotaryEmbeddingFast
@@ -29,6 +28,32 @@ def build_mlp(hidden_size, projector_dim, z_dim):
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+# Derf from "Stronger Normalization Free Transformer"
+class Derf(nn.Module):
+    def __init__(self, normalized_shape, elementwise_affine=True, alpha_init_value=0.5, shift_init_value=0.0):
+        super().__init__()
+        self.normalized_shape = normalized_shape
+        self.elementwise_affine = elementwise_affine
+        self.alpha_init_value = alpha_init_value
+        self.shift_init_value = shift_init_value
+
+        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.shift = nn.Parameter(torch.ones(1) * shift_init_value)
+
+    def forward(self, x):
+        x = self.alpha * x + self.shift
+        if self.elementwise_affine:
+            return torch.erf(x) * self.weight + self.bias
+        else:
+            return torch.erf(x)
+
+    def extra_repr(self):
+        return f"normalized_shape={self.normalized_shape}, elementwise_affine={self.elementwise_affine}, alpha_init_value={self.alpha_init_value}, shift_init_value={self.shift_init_value}"
+
 
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
@@ -117,7 +142,7 @@ class Attention(nn.Module):
         qk_norm: bool = False,
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
-        norm_layer: nn.Module = nn.RMSNorm,
+        norm_layer: nn.Module = Derf,
         use_v1_residual: bool = True,
     ) -> None:
         super().__init__()
@@ -191,7 +216,7 @@ class SiTBlock(nn.Module):
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, use_v1_residual: bool = True, **block_kwargs):
         super().__init__()
-        self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm1 = Derf(hidden_size, elementwise_affine=False)
         self.attn = Attention(
             hidden_size,
             num_heads=num_heads,
@@ -201,7 +226,7 @@ class SiTBlock(nn.Module):
         )
         if "fused_attn" in block_kwargs.keys():
             self.attn.fused_attn = block_kwargs["fused_attn"]
-        self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm2 = Derf(hidden_size, elementwise_affine=False)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(
@@ -242,7 +267,7 @@ class FinalLayer(nn.Module):
     """
     def __init__(self, hidden_size, patch_size, out_channels, cls_token_dim):
         super().__init__()
-        self.norm_final = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = Derf(hidden_size, elementwise_affine=False)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.linear_cls = nn.Linear(hidden_size, cls_token_dim, bias=True)
         self.adaLN_modulation = nn.Sequential(
@@ -357,7 +382,7 @@ class SiT(nn.Module):
 
 
         self.cls_projectors2 = nn.Linear(in_features=cls_token_dim, out_features=hidden_size, bias=True)
-        self.wg_norm = nn.RMSNorm(hidden_size, elementwise_affine=True, eps=1e-6)
+        self.wg_norm = Derf(hidden_size, elementwise_affine=True)
 
         # RoPE for spatial tokens
         head_dim = hidden_size // num_heads
@@ -474,7 +499,7 @@ class SiT(nn.Module):
     def _sprint_fuse(self, f_dense, g_full):
         """
         f_dense: (B, T, C) encoder output ft
-        g_full: (B, T, C) padded sparse output g_pad
+        g_full: (B, T, C) padded sparse output g_pad4
         Returns fused h: (B, T, C)
         """
         h = torch.cat([f_dense, g_full], dim=-1)  # (B, T, 2C)
