@@ -389,6 +389,9 @@ SR-DiT-11:
         Precision: 0.7852
         Recall: 0.5843
 
+        kd_value: 0.31712
+        kd_variance: 0.00616
+
 
 512 resolution
     B/1 @ 400k speedrun-dit:
