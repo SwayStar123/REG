@@ -360,6 +360,9 @@ SR-DiT-10-B/1 :
             Precision: 0.8045
             Recall: 0.5663
 
+            kd_value: 0.29088
+            kd_variance: 0.00568
+
             with whitelist only mlp, attn, sprint fusion:
                 Inception Score: 238.44406127929688
                 FID: 3.208122556516571
@@ -388,12 +391,18 @@ SR-DIT-11:
     Precision: 0.8045
     Recall: 0.5663
 
+    kd_value: 0.29088
+    kd_variance: 0.00568
+
     with layerwise scaling 2 to 6:
         Inception Score: 225.7761688232422
         FID: 3.139282794640337
         sFID: 5.395600931331501
         Precision: 0.80708
         Recall: 0.5646
+
+        kd_value: 0.28962
+        kd_variance: 0.00581
 
 
 512 resolution
