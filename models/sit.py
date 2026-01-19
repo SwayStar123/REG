@@ -278,7 +278,8 @@ class SiT(nn.Module):
         encoder_depth=8,
         depth=28,
         num_heads=16,
-        mlp_ratio=4.0,
+        mlp_ratio_min=2.0,
+        mlp_ratio_max=6.0,
         class_dropout_prob=0.1,
         num_classes=1000,
         use_cfg=False,
@@ -305,6 +306,17 @@ class SiT(nn.Module):
 
         self.encoder_depths = encoder_depths
         self.depth = depth
+
+        # Layerwise MLP scaling: start at width multiplier 2.0, end at `mlp_ratio` (default 6.0)
+        mf_min = mlp_ratio_min
+        mf_max = mlp_ratio_max
+        self.mlp_ratios = []
+        for i in range(self.depth):
+            if self.depth == 1:
+                mf = mf_max
+            else:
+                mf = mf_min + (mf_max - mf_min) * i / (self.depth - 1)
+            self.mlp_ratios.append(mf)
 
         # ----------------- SPRINT configuration -----------------
         # fθ / gθ / hθ split: default 2 / (D-4) / 2 as in the paper.
@@ -342,7 +354,7 @@ class SiT(nn.Module):
                 SiTBlock(
                     hidden_size,
                     num_heads,
-                    mlp_ratio=mlp_ratio,
+                    mlp_ratio=self.mlp_ratios[i],
                     use_v1_residual=use_v1_residual,
                     **block_kwargs,
                 )
