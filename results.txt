@@ -359,12 +359,18 @@ SR-DiT-9:
             Precision: 0.82042
             Recall: 0.5493
 
+            kd_value: 0.30321
+            kd_variance: 0.00596
+
     with model layer 1,2,3,4,5,6 to dino layer 12,12:
         Inception Score: 235.0809783935547
         FID: 3.404172497367597
         sFID: 5.403309686440593
         Precision: 0.82198
         Recall: 0.5443
+
+        kd_value: 0.30022
+        kd_variance: 0.00598
 
     XL with model layer 2 4 6 8 aligned to dino layer 12:
         Inception Score: 308.2094421386719
