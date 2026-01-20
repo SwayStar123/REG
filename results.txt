@@ -404,6 +404,25 @@ SR-DIT-11:
         kd_value: 0.28962
         kd_variance: 0.00581
 
+SR-DiT-12:
+    Inception Score: 225.7761688232422
+    FID: 3.139282794640337
+    sFID: 5.395600931331501
+    Precision: 0.80708
+    Recall: 0.5646
+
+    kd_value: 0.28962
+    kd_variance: 0.00581
+
+    with improved immiscible diffusion:
+        Inception Score: 221.07113647460938
+        FID: 3.1111489845561096
+        sFID: 5.385322660313477
+        Precision: 0.8004
+        Recall: 0.5754
+
+        kd_value: 0.29370
+        kd_variance: 0.00573
 
 512 resolution
     B/1 @ 400k speedrun-dit:

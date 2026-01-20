@@ -15,6 +15,28 @@ def sum_flat(x):
     """
     return torch.sum(x, dim=list(range(1, len(x.size()))))
 
+@torch.no_grad()
+def knn_select_noise_like(x, k: int, generator=None):
+    """
+    x: [B, ...]  (images or latents)
+    returns:
+      noise: [B, ...]  chosen among k candidates
+      idx:   [B]       chosen candidate index per sample
+    """
+    assert k >= 1
+    B = x.shape[0]
+    # candidates: [B, k, ...]
+    cand = torch.randn((B, k, *x.shape[1:]), device=x.device, dtype=x.dtype, generator=generator)
+
+    # L2 distance in float32 for stability: [B, k]
+    x_f = x.float().reshape(B, 1, -1)
+    cand_f = cand.float().reshape(B, k, -1)
+    d2 = (cand_f - x_f).pow(2).mean(dim=-1)  # mean L2^2 per candidate
+
+    idx = d2.argmin(dim=1)                   # [B]
+    noise = cand[torch.arange(B, device=x.device), idx]  # [B, ...]
+    return noise, idx
+
 class SILoss:
     def __init__(
             self,
@@ -26,6 +48,8 @@ class SILoss:
             accelerator=None, 
             apply_time_shift=False,
             shift_base=4096,
+            immiscible=True,
+            knn_k=8,
             ):
         self.prediction = prediction
         self.weighting = weighting
@@ -35,6 +59,8 @@ class SILoss:
         self.cfm_weighting = cfm_weighting
         self.apply_time_shift = apply_time_shift
         self.shift_base = shift_base
+        self.immiscible = immiscible
+        self.knn_k = knn_k
 
     def interpolant(self, t):
         if self.path_type == "linear":
@@ -53,7 +79,7 @@ class SILoss:
         return alpha_t, sigma_t, d_alpha_t, d_sigma_t
 
     def __call__(self, model, images, model_kwargs=None, zs=None, cls_token=None,
-                 time_input=None, noises=None,):
+                 time_input=None):
         if model_kwargs == None:
             model_kwargs = {}
         # sample timesteps
@@ -77,7 +103,15 @@ class SILoss:
 
         time_input = time_input.to(device=images.device, dtype=images.dtype)
 
-        if noises is None:
+        if self.immiscible:
+            # choose image noise by KNN among k Gaussian candidates
+            noises, idx = knn_select_noise_like(images, k=self.knn_k)
+
+            # no immiscible noise for cls token, 
+            # unclear how this would work along with immiscible noise for patch tokens
+            noises_cls = torch.randn_like(cls_token)
+
+        else:
             noises = torch.randn_like(images)
             noises_cls = torch.randn_like(cls_token)
 

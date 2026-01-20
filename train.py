@@ -433,7 +433,7 @@ def main(args):
                 model_kwargs = dict(y=labels)
                 loss1, proj_loss1, time_input, noises, loss2, cfm_loss, cfm_loss_cls = loss_fn(model, x, model_kwargs, zs=zs,
                                                                        cls_token=cls_token,
-                                                                       time_input=None, noises=None)
+                                                                       time_input=None)
                 loss_mean = loss1.mean()
                 loss_mean_cls = loss2.mean() * args.cls
                 proj_loss_mean = proj_loss1.mean() * args.proj_coeff

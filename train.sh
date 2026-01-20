@@ -13,7 +13,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="srdit-11+layerwisescaling-min2-max6" \
+    --exp-name="srdit-12+improved-immiscible-diffusion" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
