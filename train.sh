@@ -13,15 +13,13 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="srdit-12+improved-immiscible-diffusion" \
+    --exp-name="srdit-13+prodigy-combined" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
     --qk-norm \
     --cfm-weighting="uniform" \
     --cfm-coeff=0.05 \
-    --optimizer="muon" \
-    --muon-lr=0.001 \
-    --muon-weight-decay=0.00 \
+    --optimizer="prodigy-combined" \
     --dino-layer-index 12 12 12 \
     --encoder-depth 2 4 6

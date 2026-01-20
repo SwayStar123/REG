@@ -22,6 +22,7 @@ from models.sit import SiT_models
 from loss import SILoss
 from utils import load_encoders
 from muon import init_muon
+from prodigy_muon import ProdigyCombined
 
 from dataset import CustomDataset
 from preprocessing.encoders import load_invae
@@ -251,6 +252,8 @@ def main(args):
                 "adaLN_modulation", # ada layer norm modulation
             ],
         )
+    elif args.optimizer == "prodigy-combined":
+        optimizer = ProdigyCombined(model.parameters(), lr=1.0)
     else:
         raise ValueError(f"Unsupported optimizer: {args.optimizer}")
     
@@ -577,7 +580,7 @@ def parse_args(input_args=None):
     parser.add_argument("--max-train-steps", type=int, default=400000)
     parser.add_argument("--checkpointing-steps", type=int, default=10000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
-    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"])
+    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon", "prodigy-combined"])
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--adam-beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam-beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
