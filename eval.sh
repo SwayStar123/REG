@@ -1,7 +1,7 @@
 random_number=$((RANDOM % 100 + 1200))
 NUM_GPUS=8
 STEP="0400000"
-SAVE_PATH="exps/srdit-12+improved-immiscible-diffusion"
+SAVE_PATH="exps/srdit-13+prodigy-combined-dcoef0.2"
 NUM_STEP=250
 MODEL_SIZE='B'
 CFG_SCALE=1.0

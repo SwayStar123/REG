@@ -253,7 +253,7 @@ def main(args):
             ],
         )
     elif args.optimizer == "prodigy-combined":
-        optimizer = ProdigyCombined(model.parameters(), lr=1.0)
+        optimizer = ProdigyCombined(model.parameters(), lr=1.0, d_coef=0.2)
     else:
         raise ValueError(f"Unsupported optimizer: {args.optimizer}")
     

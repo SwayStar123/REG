@@ -13,7 +13,7 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="srdit-13+prodigy-combined" \
+    --exp-name="srdit-13+prodigy-combined-dcoef0.2" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \
