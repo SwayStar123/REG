@@ -9,11 +9,11 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS train.py \
     --path-type="linear" \
     --prediction="v" \
     --weighting="uniform" \
-    --model="SiT-XL/1" \
+    --model="SiT-G/1" \
     --enc-type="dinov2-vit-b" \
     --proj-coeff=0.5 \
     --output-dir="exps" \
-    --exp-name="srdit-12+improved-immiscible-diffusion-xl" \
+    --exp-name="rae-srdit-12+improved-immiscible-diffusion-G" \
     --batch-size=256 \
     --data-dir="dataset" \
     --cls=0.03 \

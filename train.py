@@ -19,6 +19,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 
 from models.sit import SiT_models
+from models.rae import RAE
 from loss import SILoss
 from utils import load_encoders
 from muon import init_muon
@@ -36,7 +37,7 @@ from PIL import Image
 
 logger = get_logger(__name__)
 
-def preprocess_raw_image(x, enc_type):
+def preprocess_raw_image(x):
     resolution = x.shape[-1]
     x = x / 255.
     x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x)
@@ -136,7 +137,7 @@ def main(args):
     assert args.resolution % 16 == 0, "Image size must be divisible by 16 (for the invae encoder)."
     latent_size = args.resolution // 16  # invae uses 16x downsampling
 
-    if args.enc_type != None:
+    if args.enc_type != None and args.vae_name != "rae":
         # Only main process triggers the heavy I/O / download once
         if accelerator.is_main_process:
             _ = load_encoders(args.enc_type, device, args.resolution)
@@ -148,25 +149,38 @@ def main(args):
         encoders, encoder_types, architectures = load_encoders(
             args.enc_type, device, args.resolution
         )
-    else:
-        raise NotImplementedError()
 
-    # Load custom invae model
-    if accelerator.is_main_process:
-        _ = load_invae(args.vae_name, device=device)
+    if args.vae_name == "e2e-invae":
+        # Load invae model
+        if accelerator.is_main_process:
+            _ = load_invae(args.vae_name, device=device)
 
-    # Make all processes wait until rank 0 is done
-    accelerator.wait_for_everyone()
-    vae = load_invae(args.vae_name, device=device)
-    vae.eval().requires_grad_(False)
-    channels = 32  # invae uses 32 channels
+        # Make all processes wait until rank 0 is done
+        accelerator.wait_for_everyone()
+
+        vae = load_invae("REPA-E/e2e-invae", device=device)
+        vae.eval().requires_grad_(False)
+        channels = 32  # invae uses 32 channels
     
-    # invae uses 0.3099 scaling factor
-    scaling_factor = 0.3099
-    latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
-    latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
+        # invae uses 0.3099 scaling factor
+        scaling_factor = 0.3099
+        latents_scale = torch.tensor([scaling_factor] * channels).view(1, channels, 1, 1).to(device)
+        latents_bias = torch.zeros(channels).view(1, channels, 1, 1).to(device)
 
-    z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
+        z_dims = [encoder.embed_dim for encoder in encoders] if args.enc_type != 'None' else [0]
+    elif args.vae_name == "rae":
+        # Load rae model
+        if accelerator.is_main_process:
+            _ = RAE()
+
+        # Make all processes wait until rank 0 is done
+        accelerator.wait_for_everyone()
+
+        vae = RAE().to(device)
+        vae.eval().requires_grad_(False)
+        channels = 768
+
+        z_dims = [768]
 
     # Default encoder depths (total layer indices) per model. These mirror the
     # original configs: XL/L use depth 8, B/S use depth 2.
@@ -208,7 +222,6 @@ def main(args):
     loss_fn = SILoss(
         prediction=args.prediction,
         path_type=args.path_type, 
-        encoders=encoders,
         accelerator=accelerator,
         weighting=args.weighting,
         cfm_weighting=args.cfm_weighting,
@@ -354,16 +367,16 @@ def main(args):
     sample_batch_size = 64 // accelerator.num_processes
     gt_raw_images, gt_xs, _ = next(iter(train_dataloader))
     assert gt_raw_images.shape[-1] == args.resolution
-    gt_xs = gt_xs[:sample_batch_size]
-    gt_xs = sample_posterior(
-        gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
-        )
+    # gt_xs = gt_xs[:sample_batch_size]
+    # gt_xs = sample_posterior(
+    #     gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
+    #     )
     ys = torch.randint(1000, size=(sample_batch_size,), device=device)
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
     xT = torch.randn((n, channels, latent_size, latent_size), device=device)
-    cls_z = torch.randn((n, encoders[0].embed_dim), device=device)
+    cls_z = torch.randn((n, z_dims[0]), device=device)
     
     if accelerator.is_main_process:
         sample_dir = os.path.join(args.output_dir, args.exp_name, "samples")
@@ -385,49 +398,65 @@ def main(args):
             else:
                 labels = y
             with torch.no_grad():
-                x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
+                if args.vae_name != "rae":
+                    x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
                 zs = []
                 with accelerator.autocast():
-                    for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
-                        raw_image_ = preprocess_raw_image(raw_image, encoder_type)
-                        if 'dinov2' in encoder_type:
-                            n_blocks = getattr(encoder, "n_blocks", None)
+                    raw_image_ = preprocess_raw_image(raw_image)
+                    if args.vae_name != "rae":
+                        for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
+                            if 'dinov2' in encoder_type:
+                                n_blocks = getattr(encoder, "n_blocks", None)
 
-                            # Normalize CLI argument: allow None (use last block), int, or list of ints.
-                            dino_layers = getattr(args, "dino_layer_index", None)
-                            if dino_layers is None or n_blocks is None:
-                                # Default: use the standard forward_features (last block).
-                                feats = encoder.forward_features(raw_image_)
-                                patch_tokens = feats["x_norm_patchtokens"]
-                                cls_token = feats["x_norm_clstoken"]
-                                dense_z = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
-                                zs.append(dense_z)
-                            else:
-                                if isinstance(dino_layers, int):
-                                    dino_layers = [dino_layers]
-
-                                # Clamp each requested layer into the valid range [0, n_blocks - 1].
-                                clamped_layers = [min(max(0, idx), n_blocks - 1) for idx in dino_layers]
-
-                                # get_intermediate_layers expects unique indices; we will duplicate
-                                # outputs later for any repeated indices.
-                                unique_layers = sorted(set(clamped_layers))
-
-                                layers = encoder.get_intermediate_layers(
-                                    raw_image_, n=unique_layers, reshape=False, return_class_token=True
-                                )
-
-                                # Map layer index -> (patch_tokens, cls_token)
-                                layer_to_tokens = {
-                                    layer_idx: layer_out for layer_idx, layer_out in zip(unique_layers, layers)
-                                }
-
-                                for req_idx in clamped_layers:
-                                    (patch_tokens, cls_token) = layer_to_tokens[req_idx]
+                                # Normalize CLI argument: allow None (use last block), int, or list of ints.
+                                dino_layers = getattr(args, "dino_layer_index", None)
+                                if dino_layers is None or n_blocks is None:
+                                    # Default: use the standard forward_features (last block).
+                                    feats = encoder.forward_features(raw_image_)
+                                    patch_tokens = feats["x_norm_patchtokens"]
+                                    cls_token = feats["x_norm_clstoken"]
                                     dense_z = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
                                     zs.append(dense_z)
-                        else:
-                            exit()
+                                else:
+                                    if isinstance(dino_layers, int):
+                                        dino_layers = [dino_layers]
+
+                                    # Clamp each requested layer into the valid range [0, n_blocks - 1].
+                                    clamped_layers = [min(max(0, idx), n_blocks - 1) for idx in dino_layers]
+
+                                    # get_intermediate_layers expects unique indices; we will duplicate
+                                    # outputs later for any repeated indices.
+                                    unique_layers = sorted(set(clamped_layers))
+
+                                    layers = encoder.get_intermediate_layers(
+                                        raw_image_, n=unique_layers, reshape=False, return_class_token=True
+                                    )
+
+                                    # Map layer index -> (patch_tokens, cls_token)
+                                    layer_to_tokens = {
+                                        layer_idx: layer_out for layer_idx, layer_out in zip(unique_layers, layers)
+                                    }
+
+                                    for req_idx in clamped_layers:
+                                        (patch_tokens, cls_token) = layer_to_tokens[req_idx]
+                                        dense_z = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
+                                        zs.append(dense_z)
+                    else:
+                        # x returned is [b, c, h, w], cls is [b, c]
+                        x, cls_token = vae.encode(raw_image_)
+                        
+                        # needs to be [b, 1, c], [b, h*w, c]
+                        dense_z = torch.cat([cls_token.unsqueeze(1), x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)], dim=1)
+                        zs.append(dense_z)
+
+                        unique_layers = sorted(set(args.dino_layer_index))
+
+                        if unique_layers != [12]:
+                            exit("DINO layers must be 12")
+
+                        for i in range(len(args.dino_layer_index)-1):
+                            zs.append(zs[-1])
+
 
             with accelerator.accumulate(model):
                 model_kwargs = dict(y=labels)
@@ -489,10 +518,13 @@ def main(args):
                     )
                 samples = euler_maruyama_sampler(**sampling_kwargs).to(torch.float32)
 
-                samples = vae.decode((samples - latents_bias) / latents_scale).sample
+                if args.vae_name != "rae":
+                    samples = vae.decode((samples - latents_bias) / latents_scale).sample
+                    samples = (samples + 1) / 2.
+                else:
+                    samples = vae.decode(samples)
 
                 # decode to pixels
-                samples = (samples + 1) / 2.
                 samples = samples.clamp(0, 1).contiguous()
                 accelerator.wait_for_everyone()
                 gathered = accelerator.gather(samples).contiguous()
@@ -566,7 +598,7 @@ def parse_args(input_args=None):
     parser.add_argument("--data-dir", type=str, default="../data/imagenet256")
     parser.add_argument("--resolution", type=int, choices=[256, 512], default=256)
     parser.add_argument("--batch-size", type=int, default=8)#256
-    parser.add_argument("--vae-name", type=str, default="REPA-E/e2e-invae")
+    parser.add_argument("--vae-name", type=str, default="rae", choices=["e2e-invae", "rae"])
 
     # precision
     parser.add_argument("--allow-tf32", action="store_true")

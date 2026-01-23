@@ -726,6 +726,9 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   SiT Configs                                  #
 #################################################################################
 
+def SiT_G_1(**kwargs):
+    return SiT(depth=20, hidden_size=2048, decoder_hidden_size=2048, patch_size=1, num_heads=16, **kwargs)
+
 def SiT_XL_1(**kwargs):
     return SiT(depth=28, hidden_size=1152, decoder_hidden_size=1152, patch_size=1, num_heads=16, **kwargs)
 
@@ -763,6 +766,7 @@ def SiT_S_4(**kwargs):
     return SiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
 
 SiT_models = {
+    'SiT-G/1': SiT_G_1,
     'SiT-XL/1': SiT_XL_1,  'SiT-XL/2': SiT_XL_2,  'SiT-XL/4': SiT_XL_4,
     'SiT-L/1':  SiT_L_1,   'SiT-L/2':  SiT_L_2,   'SiT-L/4':  SiT_L_4,
     'SiT-B/1':  SiT_B_1,   'SiT-B/2':  SiT_B_2,   'SiT-B/4':  SiT_B_4,

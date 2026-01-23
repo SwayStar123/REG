@@ -44,7 +44,6 @@ class SILoss:
             path_type="linear",
             weighting="uniform",
             cfm_weighting="uniform",
-            encoders=[], 
             accelerator=None, 
             apply_time_shift=False,
             shift_base=4096,
@@ -54,7 +53,6 @@ class SILoss:
         self.prediction = prediction
         self.weighting = weighting
         self.path_type = path_type
-        self.encoders = encoders
         self.accelerator = accelerator
         self.cfm_weighting = cfm_weighting
         self.apply_time_shift = apply_time_shift
